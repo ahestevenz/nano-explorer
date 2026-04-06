@@ -35,7 +35,7 @@ def register(parser):
     p_teleop.add_argument(
         "--mode",
         choices=["auto", "arrows", "pynput", "stdin"],
-        default="auto",
+        default="arrows",
         help=(
             "Input mode: "
             "arrows = raw terminal arrow keys, hold to move (default/recommended over SSH); "
