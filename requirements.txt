@@ -18,8 +18,6 @@ Jetson.GPIO==2.1.3          # GPIO control (non-camera peripherals)
 # GStreamer is used for CSI camera pipeline (system package).
 aiohttp==3.7.4              # MJPEG & WebRTC async server (last py36 compat)
 aiohttp-cors==0.7.0
-aiortc==1.0.0               # WebRTC (py36 last supported)
-av==8.0.3                   # PyAV — needed by aiortc (py36 compat)
 
 # Input / keyboard teleop
 pynput==1.7.6               # Cross-platform keyboard listener

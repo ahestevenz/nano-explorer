@@ -50,7 +50,7 @@ def register(parser):
     p_stream = sub.add_parser("stream", help="Stream the camera over Wi-Fi")
     p_stream.add_argument(
         "--mode",
-        choices=["mjpeg", "opencv", "webrtc"],
+        choices=["mjpeg", "opencv"],
         default="mjpeg",
         help="Streaming mode (default: mjpeg)",
     )
@@ -59,7 +59,7 @@ def register(parser):
         type=int,
         default=8080,
         metavar="PORT",
-        help="HTTP/WebRTC port (default: 8080)",
+        help="HTTP port (default: 8080)",
     )
     p_stream.add_argument("--width", type=int, default=640, metavar="W")
     p_stream.add_argument("--height", type=int, default=480, metavar="H")
