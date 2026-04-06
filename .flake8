@@ -1,0 +1,20 @@
+[flake8]
+max-line-length = 100
+extend-ignore =
+    # Black-compatible: slice notation spacing
+    E203,
+    # Black-compatible: line break before binary operator
+    W503,
+    # bugbear: too opinionated on line length
+    B950
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info
+per-file-ignores =
+    # Allow unused imports in __init__ re-exports
+    lib/*/__init__.py: F401

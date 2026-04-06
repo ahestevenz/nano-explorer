@@ -1,0 +1,70 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  unit-tests:
+    name: Unit tests (Python 3.6, CPU-only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python 3.6
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.6"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libopencv-dev python3-opencv \
+            libopenblas-dev libopenmpi-dev \
+            libjpeg-dev zlib1g-dev
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          # Install a CPU-only torch/torchvision for CI (not the Jetson wheel)
+          pip install torch==1.10.0+cpu torchvision==0.11.0+cpu \
+            -f https://download.pytorch.org/whl/cpu/torch_stable.html
+          # Install the rest from requirements, skipping hardware-only packages
+          pip install \
+            numpy==1.19.5 \
+            Pillow==8.4.0 \
+            PyYAML==5.4.1 \
+            loguru==0.5.3 \
+            colorama==0.4.4 \
+            pynput==1.7.6 \
+            pytest==6.2.5 \
+            pytest-mock==3.6.1 \
+            pytest-cov==2.12.1
+          # Install the package itself in editable mode
+          pip install -e .
+
+      - name: Run tests
+        env:
+          # Prevent pynput from trying to open a display
+          DISPLAY: ""
+          # Prevent OpenBLAS SIGILL on ARM (Jetson Nano) and CI runners
+          OPENBLAS_CORETYPE: ARMV8
+        run: |
+          python -m pytest tests/ \
+            --ignore=tests/navigation/test_slam.py \
+            -v \
+            --tb=short \
+            --cov=lib \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml

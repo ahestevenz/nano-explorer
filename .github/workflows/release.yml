@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog from git log
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            LOG=$(git log --oneline --no-decorate)
+          else
+            LOG=$(git log --oneline --no-decorate "${PREV_TAG}..HEAD")
+          fi
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          git archive --format=tar.gz \
+            --prefix=nano-explorer-${{ steps.version.outputs.VERSION }}/ \
+            HEAD \
+            > nano-explorer-${{ steps.version.outputs.VERSION }}.tar.gz
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "nano-explorer ${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## What's changed
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ## Installation
+            ```bash
+            pip3 install -e .
+            ```
+            See [doc/jetbot-setup.md](doc/jetbot-setup.md) for full setup instructions.
+          files: |
+            nano-explorer-${{ steps.version.outputs.VERSION }}.tar.gz
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, 'rc') || contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') }}
