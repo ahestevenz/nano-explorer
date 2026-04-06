@@ -28,6 +28,39 @@ except ImportError:
     )
 
 
+class InvertedRobot(Robot):
+    """
+    A Robot subclass where motor directions are inverted to align with the camera orientation.
+
+    On this physical configuration, the camera faces the direction of travel, but the
+    robot's chassis is mounted such that the motors drive it in the opposite direction
+    relative to the JetBot coordinate system. To correct for this, all motor commands
+    are inverted so that callers can use intuitive directional semantics:
+
+        - forward()  -> robot moves toward what the camera sees
+        - backward() -> robot moves away from what the camera sees
+
+    Internally, forward() delegates to the parent's backward() and vice versa.
+    This inversion is intentional and should not be "fixed" — it reflects the
+    physical mounting of the robot, not a bug in the logic.
+
+    Usage:
+        robot = InvertedRobot()
+        robot.forward(0.3)   # moves in the camera-facing direction
+        robot.backward(0.3)  # moves away from the camera
+    """
+
+    def forward(self, speed=0.4):
+        super().backward(speed)
+
+    def backward(self, speed=0.4):
+        super().forward(speed)
+
+    def set_motors(self, left_speed, right_speed):
+        # Also invert raw motor commands
+        super().set_motors(-left_speed, -right_speed)
+
+
 class MotorController:
     """
     Thin wrapper around jetbot.Robot.
@@ -46,7 +79,7 @@ class MotorController:
         if self._dry_run:
             logger.warning("DRY-RUN: MotorController.open() skipped.")
             return
-        self._robot = Robot()
+        self._robot = InvertedRobot()
         logger.success("MotorController ready (jetbot.Robot)")
 
     def close(self) -> None:
