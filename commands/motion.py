@@ -12,7 +12,7 @@ def register(parser):
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    # ── teleop ────────────────────────────────────────────────────────────────
+    # teleop
     p_teleop = sub.add_parser(
         "teleop",
         help="Drive the robot with keyboard arrow keys over Wi-Fi",
@@ -46,7 +46,7 @@ def register(parser):
     )
     p_teleop.set_defaults(func=_run_teleop)
 
-    # ── stream ────────────────────────────────────────────────────────────────
+    # stream
     p_stream = sub.add_parser("stream", help="Stream the camera over Wi-Fi")
     p_stream.add_argument(
         "--mode",
@@ -66,7 +66,7 @@ def register(parser):
     p_stream.add_argument("--fps", type=int, default=30, metavar="FPS")
     p_stream.set_defaults(func=_run_stream)
 
-    # ── collision ─────────────────────────────────────────────────────────────
+    # collision
     p_col = sub.add_parser(
         "collision",
         help="Run collision avoidance using a trained binary CNN",
@@ -94,7 +94,7 @@ def register(parser):
     p_col.set_defaults(func=_run_collision)
 
 
-# ── Dispatch functions ────────────────────────────────────────────────────────
+# Dispatch functions
 # Imports happen HERE, not at module level, so torch/numpy are only loaded
 # when the user explicitly runs one of these commands.
 

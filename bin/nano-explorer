@@ -11,14 +11,13 @@ Usage:
   nano-explorer --version
 """
 
-# ── OpenBLAS / numpy SIGILL fix ───────────────────────────────────────────────
+# OpenBLAS / numpy SIGILL fix
 # MUST be set before any numpy/torch import on Jetson Nano (Maxwell / ARMv8).
 # pip-installed numpy wheels bundle OpenBLAS compiled with AVX2 which the
 # Cortex-A57 does not support.  Forcing ARMV8 prevents the illegal instruction.
 import os
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
-# ─────────────────────────────────────────────────────────────────────────────
 
 import argparse
 import sys
@@ -70,7 +69,7 @@ def build_parser():
     )
     register_motion(motion_parser)
 
-    # ── Computer vision ───────────────────────────────────────────────────────
+    # Computer vision
     from commands.cmd_vision import register as register_vision
 
     vision_parser = subparsers.add_parser(
@@ -79,7 +78,7 @@ def build_parser():
     )
     register_vision(vision_parser)
 
-    # ── Navigation & mapping ──────────────────────────────────────────────────
+    # Navigation & mapping
     from commands.cmd_navigation import register as register_nav
 
     nav_parser = subparsers.add_parser(
@@ -88,7 +87,7 @@ def build_parser():
     )
     register_nav(nav_parser)
 
-    # ── Machine learning ──────────────────────────────────────────────────────
+    # Machine learning
     from commands.cmd_ml import register as register_ml
 
     ml_parser = subparsers.add_parser(

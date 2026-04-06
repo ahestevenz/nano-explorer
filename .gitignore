@@ -1,4 +1,4 @@
-# ── Python ────────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -18,20 +18,20 @@ pip-wheel-metadata/
 share/python-wheels/
 *.egg-link
 
-# ── Virtual environments ──────────────────────────────────────────────────────
+# Virtual environments
 .venv/
 venv/
 env/
 ENV/
 
-# ── Testing & coverage ────────────────────────────────────────────────────────
+# Testing & coverage
 .pytest_cache/
 .coverage
 coverage.xml
 htmlcov/
 .tox/
 
-# ── Editors ───────────────────────────────────────────────────────────────────
+# Editors
 .vscode/
 .idea/
 *.swp
@@ -39,7 +39,7 @@ htmlcov/
 *~
 .DS_Store
 
-# ── Jetson / ML artefacts ─────────────────────────────────────────────────────
+# Jetson / ML artefacts
 # Model weights — download separately; do NOT commit large binaries
 assets/models/*.pth
 assets/models/*.engine
@@ -56,9 +56,9 @@ data/
 *.plan
 *.trt
 
-# ── Logs ──────────────────────────────────────────────────────────────────────
+# Logs
 *.log
 logs/
 
-# ── OS ────────────────────────────────────────────────────────────────────────
+# OS
 Thumbs.db

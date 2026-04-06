@@ -51,9 +51,6 @@ _ARROW_MAP = {
 _KEY_TIMEOUT: float = 0.15
 
 
-# ── pynput backend resolution ─────────────────────────────────────────────────
-
-
 def _import_keyboard():
     """
     Try every available pynput backend in order.

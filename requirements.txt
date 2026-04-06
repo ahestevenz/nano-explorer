@@ -7,13 +7,13 @@
 #
 # OpenCV 4.1.1 is bundled with JetPack — do not reinstall from pip.
 
-# ── Hardware / motor control ──────────────────────────────────────────────────
+# Hardware / motor control
 Adafruit-PCA9685==1.0.1
 adafruit-circuitpython-pca9685==3.3.8
 adafruit-circuitpython-motor==3.3.0
 Jetson.GPIO==2.1.3          # GPIO control (non-camera peripherals)
 
-# ── I/O & streaming ───────────────────────────────────────────────────────────
+# I/O & streaming
 # OpenCV is supplied by JetPack; no pip package here.
 # GStreamer is used for CSI camera pipeline (system package).
 aiohttp==3.7.4              # MJPEG & WebRTC async server (last py36 compat)
@@ -21,40 +21,40 @@ aiohttp-cors==0.7.0
 aiortc==1.0.0               # WebRTC (py36 last supported)
 av==8.0.3                   # PyAV — needed by aiortc (py36 compat)
 
-# ── Input / keyboard teleop ───────────────────────────────────────────────────
+# Input / keyboard teleop
 pynput==1.7.6               # Cross-platform keyboard listener
 
-# ── Computer vision & ML ──────────────────────────────────────────────────────
+# Computer vision & ML
 numpy==1.19.5               # Last version with pre-built aarch64 wheel for py36
 # torch==1.10.0             # Install manually — see doc/jetbot-setup.md
 # torchvision==0.11.0       # Build from source — see doc/jetbot-setup.md
 pycuda==2021.1              # TensorRT Python binding dependency
 Pillow==8.4.0               # Last py36-compatible Pillow
 
-# ── Pose estimation ───────────────────────────────────────────────────────────
+# Pose estimation
 tqdm==4.64.1
 pycocotools==2.0.4
 # trt_pose — install from source: https://github.com/NVIDIA-AI-IOT/trt_pose
 # torch2trt — install from source: https://github.com/NVIDIA-AI-IOT/torch2trt
 
-# ── AprilTag / ArUco ─────────────────────────────────────────────────────────
+# AprilTag / ArUco
 pupil-apriltags==1.0.4.post6    # Pure Python apriltag detector
 # ArUco is part of OpenCV contrib — use cv2.aruco directly
 
-# ── SLAM ─────────────────────────────────────────────────────────────────────
+# SLAM
 # ORB-SLAM2 must be built from source — see doc/jetbot-setup.md
 
-# ── Configuration & utilities ─────────────────────────────────────────────────
+# Configuration & utilities
 PyYAML==5.4.1               # Config file parsing
 click==7.1.2                # Used internally; CLI uses argparse
 colorama==0.4.4             # Coloured terminal output
 loguru==0.5.3               # Structured logging (last py36 version)
 
-# ── Testing ───────────────────────────────────────────────────────────────────
+# Testing
 pytest==6.2.5               # Last version supporting py36
 pytest-mock==3.6.1
 pytest-cov==2.12.1
 
-# ── Linting (dev only) ────────────────────────────────────────────────────────
+# Linting (dev only)
 flake8==3.9.2
 flake8-bugbear==21.9.2

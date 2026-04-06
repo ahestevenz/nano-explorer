@@ -41,8 +41,6 @@ class MotorController:
         self._robot = None
         self._dry_run = not _HW_AVAILABLE
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
-
     def open(self) -> None:
         """Initialise the JetBot Robot instance."""
         if self._dry_run:
@@ -63,8 +61,6 @@ class MotorController:
 
     def __exit__(self, *_):
         self.close()
-
-    # ── Primitive control ─────────────────────────────────────────────────────
 
     def set_speeds(self, left: float, right: float) -> None:
         """
@@ -88,8 +84,6 @@ class MotorController:
             return
         if self._robot:
             self._robot.stop()
-
-    # ── Convenience helpers ───────────────────────────────────────────────────
 
     def forward(self, speed: float = 0.3) -> None:
         if self._dry_run:
