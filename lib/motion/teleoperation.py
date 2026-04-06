@@ -1,6 +1,4 @@
 """
-lib/basic/teleop.py
-
 Keyboard teleoperation for the JetBot.
 
 Three input modes (auto-selected or forced with --mode):

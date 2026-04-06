@@ -1,6 +1,4 @@
 """
-lib/motor.py
-
 Motor controller abstraction using the official JetBot Robot class.
 
     from jetbot import Robot

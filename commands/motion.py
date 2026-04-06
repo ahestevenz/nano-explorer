@@ -1,6 +1,4 @@
 """
-commands/motion.py
-
 Argparse registration and dispatch for the 'motion' command group.
 
 All lib imports are deferred to the dispatch functions (_run_*) so that
