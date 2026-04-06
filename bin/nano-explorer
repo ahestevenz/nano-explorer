@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""
+nano-explorer -- Modular CLI for the Waveshare JetBot / Jetson Nano B01.
+
+Usage:
+  nano-explorer motion    <command> [options]
+  nano-explorer vision   <command> [options]
+  nano-explorer nav      <command> [options]
+  nano-explorer ml       <command> [options]
+  nano-explorer --help
+  nano-explorer --version
+"""
+
+# ── OpenBLAS / numpy SIGILL fix ───────────────────────────────────────────────
+# MUST be set before any numpy/torch import on Jetson Nano (Maxwell / ARMv8).
+# pip-installed numpy wheels bundle OpenBLAS compiled with AVX2 which the
+# Cortex-A57 does not support.  Forcing ARMV8 prevents the illegal instruction.
+import os
+
+os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
+# ─────────────────────────────────────────────────────────────────────────────
+
+import argparse
+import sys
+
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+BANNER = (
+    Fore.CYAN
+    + r"""
+  ███╗   ██╗ █████╗ ███╗   ██╗ ██████╗
+  ████╗  ██║██╔══██╗████╗  ██║██╔═══██╗
+  ██╔██╗ ██║███████║██╔██╗ ██║██║   ██║
+  ██║╚██╗██║██╔══██║██║╚██╗██║██║   ██║
+  ██║ ╚████║██║  ██║██║ ╚████║╚██████╔╝
+  ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝
+  """
+    # + Fore.WHITE
+    # + "  E X P L O R E R   —   Waveshare JetBot / Jetson Nano B01\n"
+    # + Style.RESET_ALL
+)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="nano-explorer",
+        description="Modular CLI toolkit for the Waveshare JetBot.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--version", action="version", version="nano-explorer 0.1.0")
+
+    subparsers = parser.add_subparsers(
+        dest="group",
+        metavar="GROUP",
+        help="Command group",
+    )
+    subparsers.required = True
+
+    # Imports are deliberately deferred to here (not module-level) so that
+    # OPENBLAS_CORETYPE is already set before any transitive numpy import.
+
+    # Motion operations
+    from commands.motion import register as register_motion
+
+    motion_parser = subparsers.add_parser(
+        "motion",
+        help="robot motion, streaming and collision avoidance",
+    )
+    register_motion(motion_parser)
+
+    # ── Computer vision ───────────────────────────────────────────────────────
+    from commands.cmd_vision import register as register_vision
+
+    vision_parser = subparsers.add_parser(
+        "vision",
+        help="Object detection, tracking, segmentation, pose estimation",
+    )
+    register_vision(vision_parser)
+
+    # ── Navigation & mapping ──────────────────────────────────────────────────
+    from commands.cmd_navigation import register as register_nav
+
+    nav_parser = subparsers.add_parser(
+        "nav",
+        help="[Experimental] Line/road following, SLAM, AprilTag navigation",
+    )
+    register_nav(nav_parser)
+
+    # ── Machine learning ──────────────────────────────────────────────────────
+    from commands.cmd_ml import register as register_ml
+
+    ml_parser = subparsers.add_parser(
+        "ml",
+        help="[Experimental] Behaviour cloning -- record, train, deploy",
+    )
+    register_ml(ml_parser)
+
+    return parser
+
+
+def main():
+    print(BANNER)
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if hasattr(args, "func"):
+        try:
+            args.func(args)
+        except KeyboardInterrupt:
+            print(Fore.YELLOW + "\n[nano-explorer] Interrupted by user.")
+            sys.exit(0)
+        except Exception as exc:
+            print(Fore.RED + "\n[nano-explorer] Fatal error: {}".format(exc))
+            raise
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
