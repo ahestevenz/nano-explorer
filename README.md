@@ -1,4 +1,10 @@
 # 🤖 nano-explorer
+[![CI Tests](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml/badge.svg)](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml)
+[![Lint](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml/badge.svg)](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml)
+[![Python](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/downloads/release/python-360/)
+[![JetPack](https://img.shields.io/badge/JetPack-4.6.1-green.svg)](https://developer.nvidia.com/embedded/jetpack)
+[![Platform](https://img.shields.io/badge/platform-Jetson%20Nano-76b900.svg)](https://developer.nvidia.com/embedded/jetson-nano)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A modular command-line toolkit for the **Waveshare JetBot** powered by the **NVIDIA Jetson Nano 4GB (Maxwell, B01)**.
 
@@ -28,7 +34,7 @@ Covers basic motion, computer vision, navigation and ML experiments — all driv
 See [doc/jetbot-setup.md](doc/jetbot-setup.md) for full Jetson Nano setup instructions.
 
 ```bash
-git clone https://github.com/<your-username>/nano-explorer.git
+git clone https://github.com/ahestevenz/nano-explorer.git
 cd nano-explorer
 pip3 install -e .
 ```
