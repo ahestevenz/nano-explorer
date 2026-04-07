@@ -44,6 +44,20 @@ def register(parser):
             "auto = try arrows -> pynput -> stdin"
         ),
     )
+    p_teleop.add_argument(
+        "--stream",
+        action="store_true",
+        help="Start a background MJPEG camera stream while driving "
+        "(open http://<nano-ip>:8080/stream in your browser)",
+    )
+    p_teleop.add_argument(
+        "--stream-port",
+        type=int,
+        default=8080,
+        dest="stream_port",
+        metavar="PORT",
+        help="MJPEG server port (default: 8080)",
+    )
     p_teleop.set_defaults(func=_run_teleop)
 
     # stream
@@ -106,6 +120,8 @@ def _run_teleop(args):
         speed=args.speed,
         turn_gain=args.turn_gain,
         mode=args.mode,
+        stream=args.stream,
+        stream_port=args.stream_port,
     ).run()
 
 
