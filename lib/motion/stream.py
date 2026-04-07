@@ -42,8 +42,8 @@ class CameraStreamer:
     Multi-mode camera streamer.
 
     Args:
-        mode:   "mjpeg" | "opencv" | "webrtc"
-        port:   Server port (mjpeg / webrtc only)
+        mode:   "mjpeg" | "opencv"
+        port:   Server port (mjpeg  only)
         width:  Capture / stream width
         height: Capture / stream height
         fps:    Target frame rate
