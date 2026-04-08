@@ -47,6 +47,7 @@ PyYAML==5.4.1               # Config file parsing
 click==7.1.2                # Used internally; CLI uses argparse
 colorama==0.4.4             # Coloured terminal output
 loguru==0.5.3               # Structured logging (last py36 version)
+pydantic==1.9.2             # Data validation — last version supporting Python 3.6
 
 # Testing
 pytest==6.2.5               # Last version supporting py36
