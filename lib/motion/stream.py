@@ -1,6 +1,4 @@
 """
-lib/basic/stream.py
-
 Camera streaming over Wi-Fi in three modes:
 
   mjpeg  — aiohttp server pushing MJPEG frames; open in any browser at
@@ -17,30 +15,11 @@ import threading
 
 from loguru import logger
 
-# cv2 imported lazily inside each streaming method
-from lib.camera import Camera
+from lib.camera import Camera, FrameBuffer
+from lib.network import get_wifi_ip
 
-
-class _FrameBuffer:
-    """Thread-safe single-frame ring buffer."""
-
-    def __init__(self):
-        self._frame = None
-        self._lock = threading.Lock()
-
-    def put(self, frame) -> None:
-        with self._lock:
-            self._frame = frame
-
-    def get(self):
-        with self._lock:
-            return self._frame
-
-
-class CameraStreamer:
+class CameraStreamerConfig(BaseModel):
     """
-    Multi-mode camera streamer.
-
     Args:
         mode:   "mjpeg" | "opencv"
         port:   Server port (mjpeg  only)
@@ -48,32 +27,37 @@ class CameraStreamer:
         height: Capture / stream height
         fps:    Target frame rate
     """
+    mode: str = "mjpeg"
+    port: int = Field(8080, gt=1024, lt=65535)
+    width: int = Field(640, gt=0)
+    height: int = Field(480, gt=0)
+    fps: int = Field(30, gt=0)
 
-    def __init__(
-        self,
-        mode: str = "mjpeg",
-        port: int = 8080,
-        width: int = 640,
-        height: int = 480,
-        fps: int = 30,
-    ):
-        self.mode = mode
-        self.port = port
-        self.width = width
-        self.height = height
-        self.fps = fps
-        self._buf = _FrameBuffer()
-        self._cam = Camera(width=width, height=height, fps=fps)
+    @validator("mode")
+    def mode_must_be_valid(cls, v):
+        if v not in ("mjpeg", "opencv"):
+            raise ValueError("mode must be 'mjpeg' or 'opencv'")
+        return v
+
+class CameraStreamer:
+    """
+    Multi-mode camera streamer.
+    """
+
+    def __init__(self, **kwargs):
+        self._config = CameraStreamerConfig(**kwargs)
+        self._buf = FrameBuffer()
+        self._cam = Camera(width=self._config.width, height=self._config.height, fps=self._config.fps)
 
     def run(self) -> None:
-        logger.info(f"Starting camera stream — mode={self.mode}")
+        logger.info(f"Starting camera stream — mode={self._config.mode}")
         dispatch = {
             "mjpeg": self._run_mjpeg,
             "opencv": self._run_opencv,
         }
-        fn = dispatch.get(self.mode)
+        fn = dispatch.get(self._config.mode)
         if fn is None:
-            raise ValueError(f"Unknown stream mode: {self.mode}")
+            raise ValueError(f"Unknown stream mode: {self._config.mode}")
         fn()
 
     def _capture_loop(self, stop_event: threading.Event) -> None:
@@ -118,16 +102,17 @@ class CameraStreamer:
                     await response.write(data)
                 except Exception:
                     break
-                await asyncio.sleep(1.0 / self.fps)
+                await asyncio.sleep(1.0 / self._config.fps)
 
         app = web.Application()
         app.router.add_get("/stream", _mjpeg_handler)
-
+        ip = get_wifi_ip()
+        nano_ip = ip if ip is not None else "<nano-ip>"
         logger.success(
-            f"MJPEG server running — open http://<nano-ip>:{self.port}/stream"
+            f"MJPEG server running — open http://{nano_ip}:{self._config.port}/stream"
         )
         try:
-            web.run_app(app, port=self.port)
+            web.run_app(app, port=self._config.port)
         finally:
             stop_event.set()
 

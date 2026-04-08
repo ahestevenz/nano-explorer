@@ -5,9 +5,11 @@ All lib imports are deferred to the dispatch functions (_run_*) so that
 torch/numpy are never imported during argument parsing — only when the
 user actually runs a command.
 """
+from lib.settings import NanoSettings
+import argparse
 
 
-def register(parser):
+def register(parser:argparse.ArgumentParser, settings: NanoSettings):
     """Attach sub-commands to the 'motion' argument parser."""
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
@@ -20,14 +22,14 @@ def register(parser):
     p_teleop.add_argument(
         "--speed",
         type=float,
-        default=0.3,
+        default=settings.default_speed,
         metavar="SPEED",
         help="Motor speed 0.0-1.0 (default: 0.3)",
     )
     p_teleop.add_argument(
         "--turn-gain",
         type=float,
-        default=0.5,
+        default=settings.default_turn_gain,
         dest="turn_gain",
         metavar="GAIN",
         help="Differential turn gain 0.0-1.0 (default: 0.5)",
@@ -53,7 +55,7 @@ def register(parser):
     p_teleop.add_argument(
         "--stream-port",
         type=int,
-        default=8080,
+        default=settings.stream_port,
         dest="stream_port",
         metavar="PORT",
         help="MJPEG server port (default: 8080)",
@@ -71,7 +73,7 @@ def register(parser):
     p_stream.add_argument(
         "--port",
         type=int,
-        default=8080,
+        default=settings.stream_port,
         metavar="PORT",
         help="HTTP port (default: 8080)",
     )
@@ -87,21 +89,21 @@ def register(parser):
     )
     p_col.add_argument(
         "--model",
-        default="assets/models/collision_avoidance.pth",
+        default=setting.collision_model_path,
         metavar="PATH",
         help="Path to collision avoidance model (.pth or .engine)",
     )
     p_col.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
+        default=settings.collision_threshold,
         metavar="T",
         help="Blocked probability threshold (default: 0.5)",
     )
     p_col.add_argument(
         "--speed",
         type=float,
-        default=0.3,
+        default=settings.default_speed,
         metavar="SPEED",
         help="Forward motor speed (default: 0.3)",
     )
@@ -114,27 +116,14 @@ def register(parser):
 
 
 def _run_teleop(args):
-    from lib.motion.teleoperation import TeleopController
-
-    TeleopController(
-        speed=args.speed,
-        turn_gain=args.turn_gain,
-        mode=args.mode,
-        stream=args.stream,
-        stream_port=args.stream_port,
-    ).run()
-
+    from lib.motion.teleoperation import TeleopController, TeleopConfig
+    config = TeleopConfig(**vars(args))
+    TeleopController(**config.dict()).run()
 
 def _run_stream(args):
-    from lib.motion.stream import CameraStreamer
-
-    CameraStreamer(
-        mode=args.mode,
-        port=args.port,
-        width=args.width,
-        height=args.height,
-        fps=args.fps,
-    ).run()
+    from lib.motion.stream import CameraStreamer, CameraStreamerConfig
+    config = StreamConfig(**vars(args))
+    CameraStreamer(**config.dict()).run()
 
 
 def _run_collision(args):

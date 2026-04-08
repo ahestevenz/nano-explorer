@@ -19,6 +19,8 @@ Usage:
 import threading
 
 from loguru import logger
+from lib.network import get_wifi_ip
+
 
 # GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
 _GST_CSI_PIPELINE = (
@@ -131,15 +133,40 @@ class MjpegServer:
 
         self._thread = threading.Thread(target=_serve, daemon=True)
         self._thread.start()
+        ip = get_wifi_ip()
+        nano_ip = ip if ip is not None else "<nano-ip>"
         logger.success(
             "Camera stream started — open "
-            "http://<nano-ip>:{}/stream in your browser".format(self._port)
+            f"http://{nano_ip}:{self._port}/stream in your browser"
         )
 
     def stop(self) -> None:
         self._stop_event.set()
         # Thread is a daemon — exits when main thread does.
         # Camera is managed by the caller, not here.
+
+from pydantic import BaseModel, Field, validator
+
+class CameraConfig(BaseModel):
+    """
+    Args:
+        width:     Capture width in pixels.
+        height:    Capture height in pixels.
+        fps:       Target frames per second.
+        source:    "csi" for the CSI ribbon camera, "usb" for a USB webcam.
+        device_id: V4L2 device index for USB cameras (ignored for CSI).
+    """
+    width: int = Field(640, gt=0)
+    height: int = Field(480, gt=0)
+    fps: int = Field(30, gt=0)
+    source: str = "csi"
+    device_id: int = Field(0, ge=0)
+
+    @validator("source")
+    def source_must_be_valid(cls, v):
+        if v not in ("csi", "usb"):
+            raise ValueError("source must be 'csi' or 'usb'")
+        return v
 
 
 class Camera:
@@ -148,52 +175,33 @@ class Camera:
     for the CSI camera and plain V4L2 for USB cameras.
     """
 
-    def __init__(
-        self,
-        width: int = 640,
-        height: int = 480,
-        fps: int = 30,
-        source: str = "csi",
-        device_id: int = 0,
-    ):
-        """
-        Args:
-            width:     Capture width in pixels.
-            height:    Capture height in pixels.
-            fps:       Target frames per second.
-            source:    "csi" for the CSI ribbon camera, "usb" for a USB webcam.
-            device_id: V4L2 device index for USB cameras (ignored for CSI).
-        """
-        self.width = width
-        self.height = height
-        self.fps = fps
-        self.source = source
-        self.device_id = device_id
+   def __init__(self, **kwargs):
+        self._config = CameraConfig(**kwargs)
         self._cap = None
 
     def open(self) -> None:
         """Open the camera. Raises RuntimeError if it cannot be opened."""
         import cv2
 
-        if self.source == "csi":
+        if self._config.source == "csi":
             pipeline = _GST_CSI_PIPELINE.format(
-                w=self.width, h=self.height, fps=self.fps
+                w=self._config.width, h=self._config.height, fps=self._config.fps
             )
             logger.info("Opening CSI camera via GStreamer pipeline")
             self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         else:
-            logger.info(f"Opening USB camera at /dev/video{self.device_id}")
-            self._cap = cv2.VideoCapture(self.device_id)
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+            logger.info(f"Opening USB camera at /dev/video{self._config.device_id}")
+            self._cap = cv2.VideoCapture(self._config.device_id)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
+            self._cap.set(cv2.CAP_PROP_FPS, self._config.fps)
 
         if not self._cap.isOpened():
             raise RuntimeError(
-                f"Cannot open {self.source} camera. "
+                f"Cannot open {self._config.source} camera. "
                 "Check connections and run: v4l2-ctl --list-devices"
             )
-        logger.success(f"Camera ready: {self.width}x{self.height} @ {self.fps} fps")
+        logger.success(f"Camera ready: {self._config.width}x{self._config.height} @ {self._config.fps} fps")
 
     def read(self):
         """

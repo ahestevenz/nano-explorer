@@ -28,6 +28,12 @@ except ImportError:
     )
 
 
+from pydantic import BaseModel, Field
+
+class WheelSpeeds(BaseModel):
+    left: float = Field(..., ge=-1.0, le=1.0)
+    right: float = Field(..., ge=-1.0, le=1.0)
+
 class InvertedRobot(Robot):
     """
     A Robot subclass where motor directions are inverted to align with the camera orientation.
@@ -103,13 +109,12 @@ class MotorController:
             left:  Left wheel speed  [0.0, 1.0]  (negative = reverse)
             right: Right wheel speed [0.0, 1.0]  (negative = reverse)
         """
-        left = max(-1.0, min(1.0, left))
-        right = max(-1.0, min(1.0, right))
+        speeds = WheelSpeeds(left=left, right=right)
         if self._dry_run:
-            logger.debug("DRY-RUN set_speeds: L={:.2f}  R={:.2f}".format(left, right))
+            logger.debug(f"DRY-RUN set_speeds: L={speeds.left:.2f}  R={speeds.right:.2f}")
             return
-        self._robot.left_motor.value = left
-        self._robot.right_motor.value = right
+        self._robot.left_motor.value = speeds.left
+        self._robot.right_motor.value = speeds.right
 
     def stop(self) -> None:
         if self._dry_run:
@@ -120,25 +125,25 @@ class MotorController:
 
     def forward(self, speed: float = 0.3) -> None:
         if self._dry_run:
-            logger.debug("DRY-RUN: forward({:.2f})".format(speed))
+            logger.debug(f"DRY-RUN: forward({speed:.2f})")
             return
         self._robot.forward(speed=speed)
 
     def backward(self, speed: float = 0.3) -> None:
         if self._dry_run:
-            logger.debug("DRY-RUN: backward({:.2f})".format(speed))
+            logger.debug(f"DRY-RUN: backward({speed:.2f})")
             return
         self._robot.backward(speed=speed)
 
     def turn_left(self, speed: float = 0.3) -> None:
         if self._dry_run:
-            logger.debug("DRY-RUN: turn_left({:.2f})".format(speed))
+            logger.debug(f"DRY-RUN: turn_left({speed:.2f})")
             return
         self._robot.left(speed=speed)
 
     def turn_right(self, speed: float = 0.3) -> None:
         if self._dry_run:
-            logger.debug("DRY-RUN: turn_right({:.2f})".format(speed))
+            logger.debug(f"DRY-RUN: turn_right({speed:.2f})")
             return
         self._robot.right(speed=speed)
 

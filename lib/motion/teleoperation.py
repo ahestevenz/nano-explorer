@@ -79,7 +79,7 @@ def _import_keyboard():
             from pynput import keyboard as kb
 
             _ = kb.Key.up  # sanity check
-            logger.debug("pynput backend '{}' loaded OK.".format(backend))
+            logger.debug(f"pynput backend '{backend}' loaded OK.")
             return kb
         except Exception as exc:
             errors[backend] = str(exc)
@@ -89,8 +89,8 @@ def _import_keyboard():
 
     diag = "\n".join("  {}: {}".format(b, e) for b, e in errors.items())
     raise RuntimeError(
-        "pynput could not find a working backend.\n\nBackends tried:\n{}\n\n"
-        "Try: sudo modprobe uinput && sudo chmod a+rw /dev/uinput".format(diag)
+        f"pynput could not find a working backend.\n\nBackends tried:\n{diag}\n\n"
+        "Try: sudo modprobe uinput && sudo chmod a+rw /dev/uinput"
     )
 
 
@@ -121,10 +121,14 @@ _STDIN_MAP = {
     "quit": "quit",
 }
 
+from typing_extensions import Literal
+from pydantic import BaseModel, Field, validator
 
-class TeleopController:
+from lib.network import get_wifi_ip
+
+class TeleopConfig(BaseModel):
     """
-    Keyboard-driven teleoperation controller.
+    Robot teleoperation controller config
 
     Args:
         speed:     Linear motor speed [0.0, 1.0]
@@ -132,36 +136,49 @@ class TeleopController:
         mode:      "arrows" | "pynput" | "stdin" | "auto"
         stream:      Start a background MJPEG camera stream while driving
         stream_port: Port for the MJPEG server (default 8080)
+
+    """
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
+    mode: str = "arrows"
+    stream: bool = False
+    stream_port: int = Field(8080, gt=1024, lt=65535)
+
+    @validator("mode")
+    def mode_must_be_valid(cls, v):
+        allowed = {"auto", "arrows", "pynput", "stdin"}
+        if v not in allowed:
+            raise ValueError(f"mode must be one of {allowed}")
+        return v
+
+class TeleopController:
+    """
+    Keyboard-driven teleoperation controller.
+
+    All parameters are validated by TeleopConfig before reaching here.
+    Construct via TeleopController(**config.dict()) — do not pass raw
+    argparse values directly.
     """
 
-    def __init__(
-        self,
-        speed: float = 0.3,
-        turn_gain: float = 0.5,
-        mode: str = "arrows",
-        stream: bool = False,
-        stream_port: int = 8080,
-    ):
-        self.speed = speed
-        self.turn_gain = turn_gain
-        self.mode = mode
-        self.stream = stream
-        self.stream_port = stream_port
+    def __init__(self, **kwargs):
+        self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
         self._running = False
         self._server = None
+        ip = get_wifi_ip()
+        self._nano_ip = ip if ip is not None else "<nano-ip>"
 
     def run(self) -> None:
-        if self.mode == "auto":
+        if self._config.mode == "auto":
             self._run_auto()
-        elif self.mode == "arrows":
+        elif self._config.mode == "arrows":
             self._run_arrows()
-        elif self.mode == "pynput":
+        elif self._config.mode == "pynput":
             self._run_pynput()
-        elif self.mode == "stdin":
+        elif self._config.mode == "stdin":
             self._run_stdin()
         else:
-            raise ValueError("Unknown teleop mode: {}".format(self.mode))
+            raise ValueError(f"Unknown teleop mode: {self._config.mode}")
 
     def _open_camera(self) -> Camera:
         """Open the single shared camera instance."""
@@ -178,12 +195,12 @@ class TeleopController:
 
     def _start_stream(self) -> None:
         """Start the MJPEG server pointed at the shared frame buffer."""
-        self._server = MjpegServer(port=self.stream_port)
+        self._server = MjpegServer(port=self._config.stream_port)
         self._server.start()
 
     def _feed_stream(self, cam: Camera) -> None:
         """Read one frame and push it to the stream buffer."""
-        if self.stream:
+        if self._config.stream:
             frame = cam.read()
             self._server.frame_buffer.put(frame)
 
@@ -200,7 +217,7 @@ class TeleopController:
             self._run_pynput()
             return
         except RuntimeError as exc:
-            logger.warning("pynput unavailable ({}), using stdin.".format(exc))
+            logger.warning(f"pynput unavailable ({exc}), using stdin.")
         self._run_stdin()
 
     # Mode: raw arrow keys
@@ -217,17 +234,15 @@ class TeleopController:
             "\n[teleop] Arrow keys to drive  |  q = quit\n"
             "         Hold key -> move  |  Release -> stop\n"
         )
-        if self.stream:
-            _HELP += "         Camera stream -> http://<nano-ip>:{}/stream\n".format(
-                self.stream_port
-            )
+        if self._config.stream:
+            _HELP += f"         Camera stream -> http://{self._nano_ip,}:{self._config.stream_port}/stream\n"
         print(_HELP)
 
         self._motors.open()
         cam = self._open_camera()
 
         # Start MJPEG server only after camera is confirmed open
-        if self.stream:
+        if self._config.stream:
             self._start_stream()
 
         self._running = True
@@ -267,7 +282,7 @@ class TeleopController:
                 _schedule_stop()
 
         except Exception as exc:
-            logger.error("Arrow teleop error: {}".format(exc))
+            logger.error(f"Arrow teleop error: {exc}")
         finally:
             if stop_timer is not None:
                 stop_timer.cancel()
@@ -313,10 +328,10 @@ class TeleopController:
         self._motors.open()
         cam = self._open_camera()
 
-        if self.stream:
+        if self._config.stream:
             self._start_stream()
             logger.info(
-                "Camera stream -> http://<nano-ip>:{}/stream".format(self.stream_port)
+                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
             )
 
         with kb.Listener(on_press=on_press, on_release=on_release) as listener:
@@ -338,12 +353,12 @@ class TeleopController:
     def _run_stdin(self) -> None:
         print(_STDIN_HELP)
         self._motors.open()
-        cam = self._open_camera() if self.stream else None
+        cam = self._open_camera() if self._config.stream else None
 
-        if self.stream:
+        if self._config.stream:
             self._start_stream()
             print(
-                "Camera stream -> http://<nano-ip>:{}/stream\n".format(self.stream_port)
+                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream\n"
             )
         try:
             while True:
@@ -353,14 +368,14 @@ class TeleopController:
                     break
                 action = _STDIN_MAP.get(raw)
                 if action is None:
-                    print("  Unknown: '{}'. Try: f b l r s q".format(raw))
+                    print(f"  Unknown: '{raw}'. Try: f b l r s q")
                     continue
                 if action == "quit":
                     break
                 if cam is not None:
                     self._feed_stream(cam)
                 self._apply_action(action)
-                print("  -> {}".format(action))
+                print(f"  -> {action}")
         except KeyboardInterrupt:
             pass
         finally:
@@ -373,14 +388,14 @@ class TeleopController:
             logger.info("Teleop stopped.")
 
     def _apply_action(self, action: str) -> None:
-        turn_speed = self.speed * self.turn_gain
+        turn_speed = self._config.speed * self._config.turn_gain
         dispatch = {
-            "forward": lambda: self._motors.forward(self.speed),
-            "backward": lambda: self._motors.backward(self.speed),
+            "forward": lambda: self._motors.forward(self._config.speed),
+            "backward": lambda: self._motors.backward(self._config.speed),
             "left": lambda: self._motors.turn_left(turn_speed),
             "right": lambda: self._motors.turn_right(turn_speed),
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
-        sys.stdout.write("\r[teleop] {:<10}  speed={:.2f}  ".format(action, self.speed))
+        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}  ")
         sys.stdout.flush()
