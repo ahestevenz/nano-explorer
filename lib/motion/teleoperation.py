@@ -37,9 +37,11 @@ import threading
 import time
 
 from loguru import logger
+from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera, MjpegServer
 from lib.motor import MotorController
+from lib.network import get_wifi_ip
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -121,10 +123,6 @@ _STDIN_MAP = {
     "quit": "quit",
 }
 
-from typing_extensions import Literal
-from pydantic import BaseModel, Field, validator
-
-from lib.network import get_wifi_ip
 
 class TeleopConfig(BaseModel):
     """
@@ -138,6 +136,7 @@ class TeleopConfig(BaseModel):
         stream_port: Port for the MJPEG server (default 8080)
 
     """
+
     speed: float = Field(0.3, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
     mode: str = "arrows"
@@ -150,6 +149,7 @@ class TeleopConfig(BaseModel):
         if v not in allowed:
             raise ValueError(f"mode must be one of {allowed}")
         return v
+
 
 class TeleopController:
     """
@@ -235,7 +235,7 @@ class TeleopController:
             "         Hold key -> move  |  Release -> stop\n"
         )
         if self._config.stream:
-            _HELP += f"         Camera stream -> http://{self._nano_ip,}:{self._config.stream_port}/stream\n"
+            _HELP += f"         Camera stream -> http://{(self._nano_ip,)}:{self._config.stream_port}/stream\n"
         print(_HELP)
 
         self._motors.open()

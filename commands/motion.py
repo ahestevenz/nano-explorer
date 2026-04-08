@@ -5,11 +5,13 @@ All lib imports are deferred to the dispatch functions (_run_*) so that
 torch/numpy are never imported during argument parsing — only when the
 user actually runs a command.
 """
-from lib.settings import NanoSettings
+
 import argparse
 
+from lib.settings import NanoSettings
 
-def register(parser:argparse.ArgumentParser, settings: NanoSettings):
+
+def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     """Attach sub-commands to the 'motion' argument parser."""
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
@@ -89,7 +91,7 @@ def register(parser:argparse.ArgumentParser, settings: NanoSettings):
     )
     p_col.add_argument(
         "--model",
-        default=setting.collision_model_path,
+        default=settings.collision_model_path,
         metavar="PATH",
         help="Path to collision avoidance model (.pth or .engine)",
     )
@@ -116,13 +118,16 @@ def register(parser:argparse.ArgumentParser, settings: NanoSettings):
 
 
 def _run_teleop(args):
-    from lib.motion.teleoperation import TeleopController, TeleopConfig
+    from lib.motion.teleoperation import TeleopConfig, TeleopController
+
     config = TeleopConfig(**vars(args))
     TeleopController(**config.dict()).run()
 
+
 def _run_stream(args):
     from lib.motion.stream import CameraStreamer, CameraStreamerConfig
-    config = StreamConfig(**vars(args))
+
+    config = CameraStreamerConfig(**vars(args))
     CameraStreamer(**config.dict()).run()
 
 

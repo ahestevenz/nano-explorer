@@ -19,8 +19,9 @@ Usage:
 import threading
 
 from loguru import logger
-from lib.network import get_wifi_ip
+from pydantic import BaseModel, Field, validator
 
+from lib.network import get_wifi_ip
 
 # GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
 _GST_CSI_PIPELINE = (
@@ -145,7 +146,6 @@ class MjpegServer:
         # Thread is a daemon — exits when main thread does.
         # Camera is managed by the caller, not here.
 
-from pydantic import BaseModel, Field, validator
 
 class CameraConfig(BaseModel):
     """
@@ -156,6 +156,7 @@ class CameraConfig(BaseModel):
         source:    "csi" for the CSI ribbon camera, "usb" for a USB webcam.
         device_id: V4L2 device index for USB cameras (ignored for CSI).
     """
+
     width: int = Field(640, gt=0)
     height: int = Field(480, gt=0)
     fps: int = Field(30, gt=0)
@@ -175,7 +176,7 @@ class Camera:
     for the CSI camera and plain V4L2 for USB cameras.
     """
 
-   def __init__(self, **kwargs):
+    def __init__(self, **kwargs):
         self._config = CameraConfig(**kwargs)
         self._cap = None
 
@@ -201,7 +202,9 @@ class Camera:
                 f"Cannot open {self._config.source} camera. "
                 "Check connections and run: v4l2-ctl --list-devices"
             )
-        logger.success(f"Camera ready: {self._config.width}x{self._config.height} @ {self._config.fps} fps")
+        logger.success(
+            f"Camera ready: {self._config.width}x{self._config.height} @ {self._config.fps} fps"
+        )
 
     def read(self):
         """
