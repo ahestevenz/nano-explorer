@@ -22,6 +22,8 @@ os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
 import argparse
 import sys
 
+from lib.settings import NanoSettings
+
 from colorama import Fore, Style, init
 
 init(autoreset=True)
@@ -42,7 +44,7 @@ BANNER = (
 )
 
 
-def build_parser():
+def build_parser(settings: NanoSettings):
     parser = argparse.ArgumentParser(
         prog="nano-explorer",
         description="Modular CLI toolkit for the Waveshare JetBot.",
@@ -67,7 +69,7 @@ def build_parser():
         "motion",
         help="robot motion, streaming and collision avoidance",
     )
-    register_motion(motion_parser)
+    register_motion(motion_parser, settings)
 
     # Computer vision
     from commands.cmd_vision import register as register_vision
@@ -101,7 +103,8 @@ def build_parser():
 
 def main():
     print(BANNER)
-    parser = build_parser()
+    settings = NanoSettings()
+    parser = build_parser(settings)
     args = parser.parse_args()
 
     if hasattr(args, "func"):
@@ -111,7 +114,7 @@ def main():
             print(Fore.YELLOW + "\n[nano-explorer] Interrupted by user.")
             sys.exit(0)
         except Exception as exc:
-            print(Fore.RED + "\n[nano-explorer] Fatal error: {}".format(exc))
+            print(Fore.RED + f"\n[nano-explorer] Fatal error: {exc}")
             raise
     else:
         parser.print_help()
