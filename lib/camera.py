@@ -25,12 +25,12 @@ from lib.network import get_wifi_ip
 
 # GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
 _GST_CSI_PIPELINE = (
-    "nvarguscamerasrc ! "
-    "video/x-raw(memory:NVMM),width={w},height={h},framerate={fps}/1 ! "
+    "nvarguscamerasrc sensor-mode=2 ! "
+    "video/x-raw(memory:NVMM),width=1920,height=1080,framerate={fps}/1 ! "  # sensor native
     "nvvidconv flip-method=0 ! "
-    "video/x-raw,width={w},height={h},format=BGRx ! "
+    "video/x-raw,width={w},height={h},format=BGRx ! "  # scale here
     "videoconvert ! "
-    "video/x-raw,format=BGR ! appsink drop=1"
+    "video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
 )
 
 
