@@ -132,10 +132,7 @@ def _run_stream(args):
 
 
 def _run_collision(args):
-    from lib.motion.collision import CollisionAvoider
+    from lib.motion.collision import CollisionConfig, CollisionDetector
 
-    CollisionAvoider(
-        model_path=args.model,
-        threshold=args.threshold,
-        speed=args.speed,
-    ).run()
+    config = CollisionConfig(**vars(args))
+    CollisionDetector(**config.dict()).run()
