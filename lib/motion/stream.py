@@ -14,9 +14,12 @@ import asyncio
 import threading
 
 from loguru import logger
+from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera, FrameBuffer
 from lib.network import get_wifi_ip
+
+
 
 class CameraStreamerConfig(BaseModel):
     """
@@ -27,6 +30,7 @@ class CameraStreamerConfig(BaseModel):
         height: Capture / stream height
         fps:    Target frame rate
     """
+
     mode: str = "mjpeg"
     port: int = Field(8080, gt=1024, lt=65535)
     width: int = Field(640, gt=0)
@@ -39,6 +43,7 @@ class CameraStreamerConfig(BaseModel):
             raise ValueError("mode must be 'mjpeg' or 'opencv'")
         return v
 
+
 class CameraStreamer:
     """
     Multi-mode camera streamer.
@@ -47,7 +52,9 @@ class CameraStreamer:
     def __init__(self, **kwargs):
         self._config = CameraStreamerConfig(**kwargs)
         self._buf = FrameBuffer()
-        self._cam = Camera(width=self._config.width, height=self._config.height, fps=self._config.fps)
+        self._cam = Camera(
+            width=self._config.width, height=self._config.height, fps=self._config.fps
+        )
 
     def run(self) -> None:
         logger.info(f"Starting camera stream — mode={self._config.mode}")
