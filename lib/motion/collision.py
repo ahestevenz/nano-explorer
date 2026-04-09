@@ -44,12 +44,12 @@ class CollisionConfig(BaseModel):
         return v
 
 
-class CollisionDetector:
+class CollisionAvoider:
     """
     Runs the collision avoidance loop.
 
     All parameters are validated by CollisionConfig before reaching here.
-    Construct via CollisionDetector(**config.dict()) — do not pass raw
+    Construct via CollisionAvoider(**config.dict()) — do not pass raw
     argparse values directly.
     """
 

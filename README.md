@@ -54,14 +54,21 @@ nano-explorer <group> <command> [options]
 nano-explorer motion teleop --speed SPEED
 nano-explorer motion teleop --turn-gain GAIN 
 nano-explorer motion teleop --mode {auto,arrows,pynput,stdin}
+nano-explorer motion teleop --stream
+nano-explorer motion teleop --stream-port PORT
 
 # Camera streaming
-nano-explorer motion stream --model PATH   
-nano-explorer motion stream --threshold T  # Blocked probability threshold 
-nano-explorer motion stream --speed SPEED  
+nano-explorer motion stream --mode {mjpeg,opencv} 
+nano-explorer motion stream --port PORT           
+nano-explorer motion stream --width W
+nano-explorer motion stream --height H 
 
-# Collision detector
-nano-explorer motion collision
+# Collision avoider
+nano-explorer motion collision --model PATH   
+nano-explorer motion collision --threshold T  # Blocked probability threshold 
+nano-explorer motion collision --speed SPEED 
+nano-explorer motion collision --stream
+nano-explorer motion collision --stream-port PORT
 ```
 
 ### Computer Vision & Detection

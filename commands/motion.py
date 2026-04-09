@@ -109,6 +109,20 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         metavar="SPEED",
         help="Forward motor speed (default: 0.3)",
     )
+    p_col.add_argument(
+        "--stream",
+        action="store_true",
+        help="Start a background MJPEG camera stream while running "
+        "(open http://<nano-ip>:8080/ in your browser)",
+    )
+    p_col.add_argument(
+        "--stream-port",
+        type=int,
+        default=settings.stream_port,
+        dest="stream_port",
+        metavar="PORT",
+        help="MJPEG server port (default: 8080)",
+    )
     p_col.set_defaults(func=_run_collision)
 
 
@@ -132,7 +146,7 @@ def _run_stream(args):
 
 
 def _run_collision(args):
-    from lib.motion.collision import CollisionConfig, CollisionDetector
+    from lib.motion.collision import CollisionAvoider, CollisionConfig
 
     config = CollisionConfig(**vars(args))
-    CollisionDetector(**config.dict()).run()
+    CollisionAvoider(**config.dict()).run()
