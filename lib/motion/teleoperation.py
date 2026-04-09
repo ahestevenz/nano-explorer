@@ -212,12 +212,13 @@ class TeleopController:
             self._run_arrows()
             return
         # Try pynput
-        try:
-            _import_keyboard()
-            self._run_pynput()
-            return
-        except RuntimeError as exc:
-            logger.warning(f"pynput unavailable ({exc}), using stdin.")
+        if not (os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY")):
+            try:
+                _import_keyboard()
+                self._run_pynput()
+                return
+            except RuntimeError as exc:
+                logger.warning(f"pynput unavailable ({exc}), using stdin.")
         self._run_stdin()
 
     # Mode: raw arrow keys
@@ -235,7 +236,7 @@ class TeleopController:
             "         Hold key -> move  |  Release -> stop\n"
         )
         if self._config.stream:
-            _HELP += f"         Camera stream -> http://{(self._nano_ip,)}:{self._config.stream_port}/stream\n"
+            _HELP += f"         Camera stream -> http://{(self._nano_ip)}:{self._config.stream_port}/stream\n"
         print(_HELP)
 
         self._motors.open()
@@ -294,6 +295,16 @@ class TeleopController:
 
     # Mode: pynput
     def _run_pynput(self) -> None:
+        if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
+            raise RuntimeError(
+                "pynput mode is not supported over SSH.\n\n"
+                "pynput requires either an X display (DISPLAY) or write access to\n"
+                "/dev/uinput — neither is available in a plain SSH session.\n\n"
+                "Use --mode arrows instead:\n"
+                "  nano-explorer motion teleop --mode arrows --stream\n\n"
+                "arrows mode uses raw terminal input over your existing SSH TTY\n"
+                "and works without a display or root."
+            )
         kb = _import_keyboard()
         keymap = {
             kb.Key.up: "forward",
