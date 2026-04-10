@@ -249,7 +249,7 @@ class TeleopController:
         stop_timer = None  # threading.Timer
         _NUMBER_BYTES_TO_READ: int = 3
 
-        def _schedule_stop():
+        def _schedule_stop() -> None:
             nonlocal stop_timer
             if stop_timer is not None:
                 stop_timer.cancel()
@@ -317,7 +317,7 @@ class TeleopController:
         current_action = ["stop"]
         running = [True]
 
-        def on_press(key):
+        def on_press(key)->None:
             action = keymap.get(key)
             if action:
                 current_action[0] = action
@@ -329,7 +329,7 @@ class TeleopController:
                 if key == kb.Key.esc:
                     running[0] = False
 
-        def on_release(key):
+        def on_release(key)->None:
             if key in keymap:
                 current_action[0] = "stop"
 

@@ -1,5 +1,5 @@
 """
-Camera streaming over Wi-Fi in three modes:
+Camera streaming over Wi-Fi in two modes:
 
   mjpeg  — aiohttp server pushing MJPEG frames; open in any browser at
             http://<nano-ip>:<port>/stream

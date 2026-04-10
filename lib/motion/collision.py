@@ -62,6 +62,60 @@ class CollisionAvoider:
         ip = get_wifi_ip()
         self._nano_ip: str = ip if ip is not None else "<nano-ip>"
 
+    def run(self) -> None:
+        import cv2
+        import torch
+
+        self._load_model()
+
+        cam = self._open_camera()
+        motors = MotorController()
+        motors.open()
+
+        _stop_capture = threading.Event()
+        if self._config.stream:
+            self._start_stream()
+            self._start_capture_thread(cam, _stop_capture)
+            logger.info(
+                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
+            )
+
+        logger.info(
+            f"Collision avoidance running — "
+            f"threshold={self._config.threshold}  speed={self._config.speed}  "
+            f"(Ctrl+C to stop)"
+        )
+
+        try:
+            while True:
+                frame = cam.read()
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                inp = self._transform(rgb).unsqueeze(0).to(self._device)
+
+                with torch.no_grad():
+                    out = self._model(inp)
+                    prob = torch.softmax(out, dim=1)[0][1].item()
+
+                if prob > self._config.threshold:
+                    motors.stop()
+                    motors.backward(self._config.speed * 0.5)
+                    _sleep(0.3)
+                    motors.turn_right(self._config.speed * 0.5)
+                    _sleep(0.3)
+                    motors.stop()
+                    logger.debug(f"BLOCKED  p={prob:.2f}")
+                else:
+                    motors.forward(self._config.speed)
+                    logger.debug(f"free     p={prob:.2f}")
+
+        except KeyboardInterrupt:
+            logger.info("Collision avoidance stopped.")
+        finally:
+            motors.stop()
+            motors.close()
+            _stop_capture.set()
+            self._close_camera(cam)
+
     def _load_model(self) -> None:
         # Lazy imports — only when actually running the command
         import torch
@@ -141,60 +195,6 @@ class CollisionAvoider:
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
         return t
-
-    def run(self) -> None:
-        import cv2
-        import torch
-
-        self._load_model()
-
-        cam = self._open_camera()
-        motors = MotorController()
-        motors.open()
-
-        _stop_capture = threading.Event()
-        if self._config.stream:
-            self._start_stream()
-            self._start_capture_thread(cam, _stop_capture)
-            logger.info(
-                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
-            )
-
-        logger.info(
-            f"Collision avoidance running — "
-            f"threshold={self._config.threshold}  speed={self._config.speed}  "
-            f"(Ctrl+C to stop)"
-        )
-
-        try:
-            while True:
-                frame = cam.read()
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                inp = self._transform(rgb).unsqueeze(0).to(self._device)
-
-                with torch.no_grad():
-                    out = self._model(inp)
-                    prob = torch.softmax(out, dim=1)[0][1].item()
-
-                if prob > self._config.threshold:
-                    motors.stop()
-                    motors.backward(self._config.speed * 0.5)
-                    _sleep(0.3)
-                    motors.turn_right(self._config.speed * 0.5)
-                    _sleep(0.3)
-                    motors.stop()
-                    logger.debug(f"BLOCKED  p={prob:.2f}")
-                else:
-                    motors.forward(self._config.speed)
-                    logger.debug(f"free     p={prob:.2f}")
-
-        except KeyboardInterrupt:
-            logger.info("Collision avoidance stopped.")
-        finally:
-            motors.stop()
-            motors.close()
-            _stop_capture.set()
-            self._close_camera(cam)
 
 
 def _sleep(seconds: float) -> None:
