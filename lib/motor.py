@@ -30,9 +30,11 @@ except ImportError:
 
 from pydantic import BaseModel, Field
 
+
 class WheelSpeeds(BaseModel):
     left: float = Field(..., ge=-1.0, le=1.0)
     right: float = Field(..., ge=-1.0, le=1.0)
+
 
 class InvertedRobot(Robot):
     """

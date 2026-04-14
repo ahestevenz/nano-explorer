@@ -20,7 +20,6 @@ from lib.camera import Camera, FrameBuffer
 from lib.network import get_wifi_ip
 
 
-
 class CameraStreamerConfig(BaseModel):
     """
     Args:
@@ -78,14 +77,11 @@ class CameraStreamer:
             from aiohttp import web
         except ImportError:
             raise RuntimeError(
-                "aiohttp is required for MJPEG streaming. "
-                "Run: pip3 install 'aiohttp==3.7.4'"
+                "aiohttp is required for MJPEG streaming. " "Run: pip3 install 'aiohttp==3.7.4'"
             )
 
         stop_event = threading.Event()
-        cap_thread = threading.Thread(
-            target=self._capture_loop, args=(stop_event,), daemon=True
-        )
+        cap_thread = threading.Thread(target=self._capture_loop, args=(stop_event,), daemon=True)
         cap_thread.start()
 
         async def _mjpeg_handler(request):
@@ -101,10 +97,7 @@ class CameraStreamer:
                 import cv2
 
                 _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                data = (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                )
+                data = b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
                 try:
                     await response.write(data)
                 except Exception:
@@ -115,9 +108,7 @@ class CameraStreamer:
         app.router.add_get("/stream", _mjpeg_handler)
         ip = get_wifi_ip()
         nano_ip = ip if ip is not None else "<nano-ip>"
-        logger.success(
-            f"MJPEG server running — open http://{nano_ip}:{self._config.port}/stream"
-        )
+        logger.success(f"MJPEG server running — open http://{nano_ip}:{self._config.port}/stream")
         try:
             web.run_app(app, port=self._config.port)
         finally:

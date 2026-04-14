@@ -1,6 +1,6 @@
 [tool.ruff]
 # Target Python 3.6 (JetPack 4.6.1 / Jetson Nano B01)
-target-version = "py36"
+target-version = "py37"
 line-length = 100
 
 # Directories to check

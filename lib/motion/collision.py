@@ -40,9 +40,7 @@ class CollisionConfig(BaseModel):
     @validator("model_path")
     def model_path_must_exist(cls, v):
         if not Path(v).exists():
-            raise ValueError(
-                f"Model not found: {v}\nTrain one with: nano-explorer ml train"
-            )
+            raise ValueError(f"Model not found: {v}\nTrain one with: nano-explorer ml train")
         return v
 
 
@@ -164,9 +162,7 @@ class CollisionAvoider:
                 from torchvision.models import alexnet
 
                 model = alexnet(pretrained=False)
-                model.classifier[6] = torch.nn.Linear(
-                    model.classifier[6].in_features, 2
-                )
+                model.classifier[6] = torch.nn.Linear(model.classifier[6].in_features, 2)
             else:
                 # ResNet-trained model
                 model = resnet18(pretrained=False)
@@ -194,9 +190,7 @@ class CollisionAvoider:
         self._server = MjpegServer(port=self._config.stream_port)
         self._server.start()
 
-    def _start_capture_thread(
-        self, cam: Camera, stop_event: threading.Event
-    ) -> threading.Thread:
+    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
         """
         Push frames from cam into the stream buffer in a dedicated thread.
         Decouples capture rate from the inference loop so the stream

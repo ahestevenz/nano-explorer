@@ -317,7 +317,7 @@ class TeleopController:
         current_action = ["stop"]
         running = [True]
 
-        def on_press(key)->None:
+        def on_press(key) -> None:
             action = keymap.get(key)
             if action:
                 current_action[0] = action
@@ -329,13 +329,11 @@ class TeleopController:
                 if key == kb.Key.esc:
                     running[0] = False
 
-        def on_release(key)->None:
+        def on_release(key) -> None:
             if key in keymap:
                 current_action[0] = "stop"
 
-        logger.info(
-            "Teleop (pynput) — arrow keys to drive, SPACE to stop, Q/ESC to quit"
-        )
+        logger.info("Teleop (pynput) — arrow keys to drive, SPACE to stop, Q/ESC to quit")
         self._motors.open()
         cam = None
         _stop_capture = threading.Event()
@@ -373,9 +371,7 @@ class TeleopController:
             cam = self._open_camera()
             self._start_stream()
             self._start_capture_thread(cam, _stop_capture)
-            print(
-                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream\n"
-            )
+            print(f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream\n")
         try:
             while True:
                 try:
@@ -415,9 +411,7 @@ class TeleopController:
         sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}  ")
         sys.stdout.flush()
 
-    def _start_capture_thread(
-        self, cam: Camera, stop_event: threading.Event
-    ) -> threading.Thread:
+    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
         """
         Push frames from cam into the stream buffer in a dedicated thread.
         Decouples capture rate from the input/control loop so the stream

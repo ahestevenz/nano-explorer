@@ -52,21 +52,21 @@ nano-explorer <group> <command> [options]
 ```bash
 # Teleoperation via keyboard (arrow keys)
 nano-explorer motion teleop --speed SPEED
-nano-explorer motion teleop --turn-gain GAIN 
+nano-explorer motion teleop --turn-gain GAIN
 nano-explorer motion teleop --mode {auto,arrows,pynput,stdin}
 nano-explorer motion teleop --stream
 nano-explorer motion teleop --stream-port PORT
 
 # Camera streaming
-nano-explorer motion stream --mode {mjpeg,opencv} 
-nano-explorer motion stream --port PORT           
+nano-explorer motion stream --mode {mjpeg,opencv}
+nano-explorer motion stream --port PORT
 nano-explorer motion stream --width W
-nano-explorer motion stream --height H 
+nano-explorer motion stream --height H
 
 # Collision avoider
-nano-explorer motion collision --model PATH   
-nano-explorer motion collision --threshold T  # Blocked probability threshold 
-nano-explorer motion collision --speed SPEED 
+nano-explorer motion collision --model PATH
+nano-explorer motion collision --threshold T  # Blocked probability threshold
+nano-explorer motion collision --speed SPEED
 nano-explorer motion collision --stream
 nano-explorer motion collision --stream-port PORT
 ```
@@ -81,7 +81,7 @@ nano-explorer motion collision --stream-port PORT
 
 ## Configuration
 
-All model paths, camera parameters and detection thresholds live in `config/`.  
+All model paths, camera parameters and detection thresholds live in `config/`.
 Edit the relevant YAML before running a command — no source changes needed.
 
 See [`config/README.md`](config/README.md) for field descriptions.
@@ -97,6 +97,43 @@ python3 -m pytest tests/ -v
 # Single group
 python3 -m pytest tests/vision/ -v
 ```
+
+---
+
+## Development
+
+These tools run on your **laptop/desktop** — not on the Nano itself.
+
+### Setup
+
+```bash
+pip install pre-commit black ruff pylint
+pre-commit install   # registers the git hook
+```
+
+### Running the checks manually
+
+```bash
+# Run all hooks against every file
+pre-commit run --all-files
+
+# Or run individual tools
+ruff check lib/ commands/        # linter
+ruff format lib/ commands/       # formatter check
+black --check lib/ commands/     # format check
+pylint lib/ commands/            # static analysis
+```
+
+### Tools
+
+| Tool | Role |
+|---|---|
+| [ruff](https://docs.astral.sh/ruff/) | Linter + import sorter (replaces flake8 + isort) |
+| [black](https://black.readthedocs.io/) | Opinionated code formatter |
+| [pylint](https://pylint.readthedocs.io/) | Deep static analysis |
+| [pre-commit](https://pre-commit.com/) | Git hook manager — runs all of the above on commit |
+
+The same checks run automatically in CI on every push and pull request via GitHub Actions.
 
 ---
 

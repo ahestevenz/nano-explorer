@@ -15,7 +15,7 @@ A complete initialisation guide for the Waveshare JetBot on a Jetson Nano 4GB (M
 
 ## Step 1 -- Flash JetPack 4.6.1
 
-1. Download the SD card image from NVIDIA:  
+1. Download the SD card image from NVIDIA:
    `jetson-nano-jp461-sd-card-image.zip` from https://developer.nvidia.com/jetson-nano-sd-card-image
 2. Flash to a ≥ 64 GB microSD card using **balenaEtcher** or `dd`.
 3. Insert the card, connect a display + keyboard, and boot.

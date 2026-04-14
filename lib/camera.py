@@ -19,6 +19,7 @@ Usage:
 import threading
 
 import numpy as np
+import cv2
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
@@ -79,8 +80,6 @@ class MjpegServer:
 
         import asyncio
 
-        import cv2
-
         async def _handler(request):
             from aiohttp import web as _web
 
@@ -96,17 +95,12 @@ class MjpegServer:
                     await asyncio.sleep(0.02)
                     continue
 
-                success, jpeg = cv2.imencode(
-                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75]
-                )
+                success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if not success or jpeg is None:
                     await asyncio.sleep(0.02)
                     continue
 
-                data = (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-                )
+                data = b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
                 try:
                     await response.write(data)
                 except Exception:
@@ -138,8 +132,7 @@ class MjpegServer:
         ip = get_wifi_ip()
         nano_ip = ip if ip is not None else "<nano-ip>"
         logger.success(
-            "Camera stream started — open "
-            f"http://{nano_ip}:{self._port}/stream in your browser"
+            "Camera stream started — open " f"http://{nano_ip}:{self._port}/stream in your browser"
         )
 
     def stop(self) -> None:
