@@ -1,0 +1,69 @@
+name: Lint
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ruff:
+    name: ruff (linter + formatter check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"   # ruff runs on host Python, not target
+
+      - name: Install ruff
+        run: pip install ruff==0.3.5
+
+      - name: Lint with ruff
+        run: ruff check lib/ commands/ bin/
+
+      - name: Format check with ruff
+        run: ruff format --check lib/ commands/ bin/
+
+  black:
+    name: black (format check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install black
+        run: pip install black==24.3.0
+
+      - name: Check formatting
+        run: black --check lib/ commands/ bin/
+
+  pylint:
+    name: pylint (static analysis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.6"
+
+      - name: Install pylint and stubs
+        run: |
+          pip install pylint==2.13.9   # last version supporting py3.6
+          pip install \
+            numpy==1.19.5 \
+            PyYAML==5.4.1 \
+            loguru==0.5.3 \
+            colorama==0.4.4
+
+      - name: Run pylint
+        run: |
+          pylint lib/ commands/ \
+            --rcfile=.pylintrc \
+            --score=no \
+            --exit-zero   # don't fail CI on pylint warnings (advisory only)
