@@ -18,6 +18,7 @@ Usage:
 
 import threading
 
+import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
@@ -52,7 +53,7 @@ class FrameBuffer:
 
 class MjpegServer:
     """
-    Serves frames from an external _FrameBuffer over MJPEG.
+    Serves frames from an external FrameBuffer over MJPEG.
 
     The camera is owned and operated by the main teleop loop.
     This class only encodes and streams whatever is in the buffer —
@@ -206,7 +207,7 @@ class Camera:
             f"Camera ready: {self._config.width}x{self._config.height} @ {self._config.fps} fps"
         )
 
-    def read(self):
+    def read(self) -> np.ndarray:
         """
         Read one frame.
 

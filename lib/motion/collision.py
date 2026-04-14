@@ -7,6 +7,8 @@ importing this module never triggers the OpenBLAS SIGILL on the Nano.
 import threading
 from pathlib import Path
 
+import cv2
+import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
@@ -63,7 +65,6 @@ class CollisionAvoider:
         self._nano_ip: str = ip if ip is not None else "<nano-ip>"
 
     def run(self) -> None:
-        import cv2
         import torch
 
         self._load_model()
@@ -95,6 +96,12 @@ class CollisionAvoider:
                 with torch.no_grad():
                     out = self._model(inp)
                     prob = torch.softmax(out, dim=1)[0][1].item()
+
+                annotated = self._annotated_frame(frame=frame, model_score=prob)
+
+                # push annotated frame to MJPEG stream if active
+                if self._config.stream and self._server is not None:
+                    self._server.frame_buffer.put(annotated)
 
                 if prob > self._config.threshold:
                     motors.stop()
@@ -149,11 +156,23 @@ class CollisionAvoider:
         else:
             import torch
 
-            model = resnet18(pretrained=False)
-            model.fc = torch.nn.Linear(model.fc.in_features, 2)
-            model.load_state_dict(
-                torch.load(str(model_path), map_location=self._device)
-            )
+            state_dict = torch.load(str(model_path), map_location=self._device)
+            first_key = next(iter(state_dict))
+
+            if first_key.startswith("features"):
+                # AlexNet-trained model (JetBot default notebook)
+                from torchvision.models import alexnet
+
+                model = alexnet(pretrained=False)
+                model.classifier[6] = torch.nn.Linear(
+                    model.classifier[6].in_features, 2
+                )
+            else:
+                # ResNet-trained model
+                model = resnet18(pretrained=False)
+                model.fc = torch.nn.Linear(model.fc.in_features, 2)
+
+            model.load_state_dict(state_dict)
             self._model = model.to(self._device).eval()
             logger.success(f"Loaded PyTorch model: {model_path}")
 
@@ -195,6 +214,34 @@ class CollisionAvoider:
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
         return t
+
+    def _annotated_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
+        annotated = frame.copy()
+        BAR_ORIGIN = (10, 10)
+        BAR_END_X = 310
+        BAR_HEIGHT = 35
+        BAR_SCALE = BAR_END_X - BAR_ORIGIN[0]
+
+        blocked = model_score > self._config.threshold
+        color = (0, 0, 255) if blocked else (0, 255, 0)
+
+        bar_x = BAR_ORIGIN[0] + int(model_score * BAR_SCALE)
+        marker_x = BAR_ORIGIN[0] + int(self._config.threshold * BAR_SCALE)
+
+        cv2.rectangle(annotated, BAR_ORIGIN, (BAR_END_X, BAR_HEIGHT), (50, 50, 50), -1)
+        cv2.rectangle(annotated, BAR_ORIGIN, (bar_x, BAR_HEIGHT), color, -1)
+        cv2.line(annotated, (marker_x, 8), (marker_x, 37), (255, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            f"{'BLOCKED' if blocked else 'FREE'}  p={model_score:.2f}",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        return annotated
 
 
 def _sleep(seconds: float) -> None:
