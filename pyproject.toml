@@ -70,3 +70,57 @@ exclude = '''
   | dist
 )/
 '''
+
+[tool.pylint.master]
+jobs = 2
+init-hook = "import sys; sys.path.insert(0, '.')"
+
+[tool.pylint."messages control"]
+disable = [
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "C0301",  # line-too-long
+    "C0303",  # trailing-whitespace
+    "C0411",  # wrong-import-order
+    "C0413",  # wrong-import-position  ← add this
+    "W0611",  # unused-import
+    "W0612",  # unused-variable
+    "R0903",  # too-few-public-methods
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "W0212",  # protected-access
+    "W0703",  # broad-except
+    "W0107",  # unnecessary-pass
+    "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
+]
+
+[tool.pylint.format]
+max-line-length = 100
+indent-string = "    "
+
+[tool.pylint.design]
+max-args = 10
+max-attributes = 15
+max-bool-expr = 6
+max-branches = 15
+max-returns = 8
+max-statements = 60
+
+[tool.pylint.similarities]
+min-similarity-lines = 8
+ignore-comments = true
+ignore-docstrings = true
+
+
+[tool.pylint.typecheck]
+ignored-modules = [
+    "jetbot", "jetson", "board", "busio",
+    "adafruit_pca9685", "adafruit_motor",
+    "cv2", "torch", "torchvision", "trt_pose", "torch2trt",
+    "pynput", "apriltag", "colorama", "aiohttp",
+]
+ignored-classes = ["jetbot.Robot"]
+
+[tool.pylint.basic]
+module-rgx = "[a-z][a-z0-9-]*"

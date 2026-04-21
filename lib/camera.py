@@ -158,7 +158,7 @@ class CameraConfig(BaseModel):
     device_id: int = Field(0, ge=0)
 
     @validator("source")
-    def source_must_be_valid(cls, v):
+    def source_must_be_valid(cls, v):  # pylint: disable=no-self-argument
         if v not in ("csi", "usb"):
             raise ValueError("source must be 'csi' or 'usb'")
         return v
@@ -176,7 +176,6 @@ class Camera:
 
     def open(self) -> None:
         """Open the camera. Raises RuntimeError if it cannot be opened."""
-        import cv2
 
         if self._config.source == "csi":
             pipeline = _GST_CSI_PIPELINE.format(

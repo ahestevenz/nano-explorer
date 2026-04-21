@@ -54,6 +54,7 @@ _ARROW_MAP = {
 _KEY_TIMEOUT: float = 0.15
 _SLEEP_TIME: float = 0.05
 _TIME_OUT: float = 0.05
+_NUMBER_BYTES_TO_READ: int = 3
 
 
 def _import_keyboard():
@@ -91,7 +92,7 @@ def _import_keyboard():
                 if "pynput" in mod:
                     del sys.modules[mod]
 
-    diag = "\n".join("  {}: {}".format(b, e) for b, e in errors.items())
+    diag = "\n".join(f"  {b}: {e}" for b, e in errors.items())
     raise RuntimeError(
         f"pynput could not find a working backend.\n\nBackends tried:\n{diag}\n\n"
         "Try: sudo modprobe uinput && sudo chmod a+rw /dev/uinput"
@@ -146,7 +147,7 @@ class TeleopConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
 
     @validator("mode")
-    def mode_must_be_valid(cls, v):
+    def mode_must_be_valid(cls, v):  # pylint: disable=no-self-argument
         allowed = {"auto", "arrows", "pynput", "stdin"}
         if v not in allowed:
             raise ValueError(f"mode must be one of {allowed}")
@@ -227,13 +228,13 @@ class TeleopController:
         import termios
         import tty
 
-        _HELP = (
+        _help = (
             "\n[teleop] Arrow keys to drive  |  q = quit\n"
             "         Hold key -> move  |  Release -> stop\n"
         )
         if self._config.stream:
-            _HELP += f"         Camera stream -> http://{(self._nano_ip)}:{self._config.stream_port}/stream\n"
-        print(_HELP)
+            _help += f"         Camera stream -> http://{(self._nano_ip)}:{self._config.stream_port}/stream\n"
+        print(_help)
 
         self._motors.open()
         cam = None
@@ -247,7 +248,6 @@ class TeleopController:
 
         self._running = True
         stop_timer = None  # threading.Timer
-        _NUMBER_BYTES_TO_READ: int = 3
 
         def _schedule_stop() -> None:
             nonlocal stop_timer

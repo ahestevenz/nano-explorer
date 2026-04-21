@@ -37,7 +37,7 @@ class CameraStreamerConfig(BaseModel):
     fps: int = Field(30, gt=0)
 
     @validator("mode")
-    def mode_must_be_valid(cls, v):
+    def mode_must_be_valid(cls, v):  # pylint: disable=no-self-argument
         if v not in ("mjpeg", "opencv"):
             raise ValueError("mode must be 'mjpeg' or 'opencv'")
         return v
@@ -75,10 +75,10 @@ class CameraStreamer:
     def _run_mjpeg(self) -> None:
         try:
             from aiohttp import web
-        except ImportError:
+        except ImportError as e:
             raise RuntimeError(
-                "aiohttp is required for MJPEG streaming. " "Run: pip3 install 'aiohttp==3.7.4'"
-            )
+                "aiohttp is required for MJPEG streaming. Run: pip3 install 'aiohttp==3.7.4'"
+            ) from e
 
         stop_event = threading.Event()
         cap_thread = threading.Thread(target=self._capture_loop, args=(stop_event,), daemon=True)

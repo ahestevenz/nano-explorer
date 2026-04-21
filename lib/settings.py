@@ -1,8 +1,8 @@
 # lib/settings.py
-from pydantic import BaseSettings, Field
+from pydantic import BaseSettings, Field  # pylint: disable = no-name-in-module
 
 
-class NanoSettings(BaseSettings):
+class NanoSettings(BaseSettings):  # pylint: disable = no-name-in-module
     default_speed: float = Field(0.3, ge=0.0, le=1.0)
     default_turn_gain: float = Field(0.5, ge=0.0, le=1.0)
     stream_port: int = Field(8080, gt=1024, lt=65535)

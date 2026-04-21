@@ -38,7 +38,7 @@ class CollisionConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
 
     @validator("model_path")
-    def model_path_must_exist(cls, v):
+    def model_path_must_exist(cls, v):  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(f"Model not found: {v}\nTrain one with: nano-explorer ml train")
         return v
@@ -147,13 +147,11 @@ class CollisionAvoider:
                 self._model = TRTModule()
                 self._model.load_state_dict(torch.load(str(model_path)))
                 logger.success(f"Loaded TensorRT engine: {model_path}")
-            except ImportError:
+            except ImportError as e:
                 raise RuntimeError(
                     "torch2trt is required for .engine models. See doc/jetbot-setup.md"
-                )
+                ) from e
         else:
-            import torch
-
             state_dict = torch.load(str(model_path), map_location=self._device)
             first_key = next(iter(state_dict))
 
@@ -211,19 +209,19 @@ class CollisionAvoider:
 
     def _annotated_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
         annotated = frame.copy()
-        BAR_ORIGIN = (10, 10)
-        BAR_END_X = 310
-        BAR_HEIGHT = 35
-        BAR_SCALE = BAR_END_X - BAR_ORIGIN[0]
+        bar_origin = (10, 10)
+        bar_end_x = 310
+        bar_height = 35
+        bar_scale = bar_end_x - bar_origin[0]
 
         blocked = model_score > self._config.threshold
         color = (0, 0, 255) if blocked else (0, 255, 0)
 
-        bar_x = BAR_ORIGIN[0] + int(model_score * BAR_SCALE)
-        marker_x = BAR_ORIGIN[0] + int(self._config.threshold * BAR_SCALE)
+        bar_x = bar_origin[0] + int(model_score * bar_scale)
+        marker_x = bar_origin[0] + int(self._config.threshold * bar_scale)
 
-        cv2.rectangle(annotated, BAR_ORIGIN, (BAR_END_X, BAR_HEIGHT), (50, 50, 50), -1)
-        cv2.rectangle(annotated, BAR_ORIGIN, (bar_x, BAR_HEIGHT), color, -1)
+        cv2.rectangle(annotated, bar_origin, (bar_end_x, bar_height), (50, 50, 50), -1)
+        cv2.rectangle(annotated, bar_origin, (bar_x, bar_height), color, -1)
         cv2.line(annotated, (marker_x, 8), (marker_x, 37), (255, 255, 0), 2)
         cv2.putText(
             annotated,
