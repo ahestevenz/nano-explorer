@@ -233,7 +233,8 @@ class TeleopController:
             "         Hold key -> move  |  Release -> stop\n"
         )
         if self._config.stream:
-            _help += f"         Camera stream -> http://{(self._nano_ip)}:{self._config.stream_port}/stream\n"
+            url = f"http://{self._nano_ip}:{self._config.stream_port}/stream"
+            _help += f"         Camera stream -> {url}\n"
         print(_help)
 
         self._motors.open()
