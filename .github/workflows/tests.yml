@@ -1,5 +1,4 @@
 name: Tests
-
 on:
   push:
     branches: [ "main", "develop" ]
@@ -8,16 +7,15 @@ on:
 
 jobs:
   unit-tests:
-    name: Unit tests (Python 3.6, CPU-only)
+    name: Unit tests (Python 3.10, CPU-only)
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.6
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.6"
+          python-version: "3.10"
 
       - name: Install system dependencies
         run: |
@@ -30,32 +28,27 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          # Install a CPU-only torch/torchvision for CI (not the Jetson wheel)
-          pip install torch==1.10.0+cpu torchvision==0.11.0+cpu \
-            -f https://download.pytorch.org/whl/cpu/torch_stable.html
-          # Install the rest from requirements, skipping hardware-only packages
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install \
-            numpy==1.19.5 \
-            Pillow==8.4.0 \
-            PyYAML==5.4.1 \
-            loguru==0.5.3 \
-            colorama==0.4.4 \
-            pynput==1.7.6 \
-            pytest==6.2.5 \
-            pytest-mock==3.6.1 \
-            pytest-cov==2.12.1
-          # Install the package itself in editable mode
+            "pydantic>=1.9,<2.0" \
+            numpy \
+            Pillow \
+            PyYAML \
+            loguru \
+            colorama \
+            pynput \
+            pytest \
+            pytest-mock \
+            pytest-cov
           pip install -e .
 
       - name: Run tests
         env:
-          # Prevent pynput from trying to open a display
           DISPLAY: ""
-          # Prevent OpenBLAS SIGILL on ARM (Jetson Nano) and CI runners
           OPENBLAS_CORETYPE: ARMV8
         run: |
           python -m pytest tests/ \
-            --ignore=tests/navigation/test_slam.py \
+            -m "not hardware" \
             -v \
             --tb=short \
             --cov=lib \
@@ -63,7 +56,7 @@ jobs:
             --cov-report=xml:coverage.xml
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: coverage-report

@@ -18,6 +18,38 @@ from loguru import logger
 try:
     from jetbot import Robot
 
+    class InvertedRobot(Robot):
+        """
+        A Robot subclass where motor directions are inverted to align with the camera orientation.
+
+        On this physical configuration, the camera faces the direction of travel, but the
+        robot's chassis is mounted such that the motors drive it in the opposite direction
+        relative to the JetBot coordinate system. To correct for this, all motor commands
+        are inverted so that callers can use intuitive directional semantics:
+
+            - forward()  -> robot moves toward what the camera sees
+            - backward() -> robot moves away from what the camera sees
+
+        Internally, forward() delegates to the parent's backward() and vice versa.
+        This inversion is intentional and should not be "fixed" — it reflects the
+        physical mounting of the robot, not a bug in the logic.
+
+        Usage:
+            robot = InvertedRobot()
+            robot.forward(0.3)   # moves in the camera-facing direction
+            robot.backward(0.3)  # moves away from the camera
+        """
+
+        def forward(self, speed=0.4):
+            super().backward(speed)
+
+        def backward(self, speed=0.4):
+            super().forward(speed)
+
+        def set_motors(self, left_speed, right_speed):
+            # Also invert raw motor commands
+            super().set_motors(-left_speed, -right_speed)
+
     _HW_AVAILABLE = True
 except ImportError:
     _HW_AVAILABLE = False
@@ -28,45 +60,12 @@ except ImportError:
     )
 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
 
 
 class WheelSpeeds(BaseModel):
     left: float = Field(..., ge=-1.0, le=1.0)
     right: float = Field(..., ge=-1.0, le=1.0)
-
-
-class InvertedRobot(Robot):
-    """
-    A Robot subclass where motor directions are inverted to align with the camera orientation.
-
-    On this physical configuration, the camera faces the direction of travel, but the
-    robot's chassis is mounted such that the motors drive it in the opposite direction
-    relative to the JetBot coordinate system. To correct for this, all motor commands
-    are inverted so that callers can use intuitive directional semantics:
-
-        - forward()  -> robot moves toward what the camera sees
-        - backward() -> robot moves away from what the camera sees
-
-    Internally, forward() delegates to the parent's backward() and vice versa.
-    This inversion is intentional and should not be "fixed" — it reflects the
-    physical mounting of the robot, not a bug in the logic.
-
-    Usage:
-        robot = InvertedRobot()
-        robot.forward(0.3)   # moves in the camera-facing direction
-        robot.backward(0.3)  # moves away from the camera
-    """
-
-    def forward(self, speed=0.4):
-        super().backward(speed)
-
-    def backward(self, speed=0.4):
-        super().forward(speed)
-
-    def set_motors(self, left_speed, right_speed):
-        # Also invert raw motor commands
-        super().set_motors(-left_speed, -right_speed)
 
 
 class MotorController:
