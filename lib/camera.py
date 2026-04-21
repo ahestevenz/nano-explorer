@@ -18,8 +18,8 @@ Usage:
 
 import threading
 
-import numpy as np
 import cv2
+import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 

@@ -22,9 +22,9 @@ os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
 import argparse
 import sys
 
-from lib.settings import NanoSettings
+from colorama import Fore, init
 
-from colorama import Fore, Style, init
+from lib.settings import NanoSettings
 
 init(autoreset=True)
 

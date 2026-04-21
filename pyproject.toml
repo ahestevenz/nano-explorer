@@ -32,12 +32,11 @@ select = [
 ignore = [
     "E203",  # whitespace before ':' (black-compatible)
     "E501",  # line too long (black handles this)
-    "W503",  # line break before binary operator
-    "B950",  # line too long (bugbear variant)
     "UP007", # Use X | Y for type unions (py3.10+, not available on 3.6)
     "UP006", # Use type instead of Type (py3.9+)
     "UP035", # typing imports (py3.9+)
     "SIM108", # ternary operator (readability preference)
+    "E402", # module level import not at top of file
 ]
 
 [tool.ruff.lint.per-file-ignores]
