@@ -15,8 +15,7 @@ from pydantic import BaseModel, Field, validator
 from lib.camera import Camera, MjpegServer
 from lib.motor import MotorController
 from lib.network import get_wifi_ip
-
-_INFERENCE_SLEEP: float = 0.0
+from lib.settings import PROJECT_ROOT_PATH
 
 
 class CollisionConfig(BaseModel):
@@ -31,7 +30,7 @@ class CollisionConfig(BaseModel):
         stream_port: Port for the MJPEG server (default 8080).
     """
 
-    model_path: str = "assets/models/collision_avoidance.pth"
+    model_path: Path = PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
     threshold: float = Field(0.5, ge=0.0, le=1.0)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     stream: bool = False

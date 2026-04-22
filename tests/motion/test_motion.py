@@ -11,11 +11,14 @@ automatically on CI via:
 """
 
 import argparse
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.settings import NanoSettings
+from lib.settings import PROJECT_ROOT_PATH, NanoSettings
 
 
 # Helpers
@@ -175,7 +178,10 @@ class TestCollisionDefaults:
         settings = NanoSettings()
         _ = _parse(["collision", "--model", "assets/models/fake.pth"], settings)
         # explicit --model wins; test the settings default is wired up correctly
-        assert settings.collision_model_path == "assets/models/collision_avoidance.pth"
+        assert (
+            settings.collision_model_path
+            == PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
+        )
 
     def test_default_threshold_from_settings(self):
         settings = NanoSettings()
@@ -311,3 +317,37 @@ class TestRunCollision:
         mock_config_cls.assert_called_once()
         mock_avoider_cls.assert_called_once()
         mock_avoider_cls.return_value.run.assert_called_once()
+
+
+class TestCollisionModelPath:
+    def test_absolute_path_is_accepted(self):
+        from lib.motion.collision import CollisionConfig
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as f:
+            tmp = Path(f.name)
+        try:
+            config = CollisionConfig(model_path=tmp)
+            assert config.model_path == tmp
+            print(tmp)
+        finally:
+            os.unlink(tmp)
+
+    def test_relative_path_is_not_accepted(self):
+        from lib.motion.collision import CollisionConfig
+
+        # Create a real file relative to project root
+        rel = Path("assets/models/test_model.pth")
+        with pytest.raises(ValueError):
+            _ = CollisionConfig(model_path=rel)
+
+    def test_missing_model_raises_value_error(self):
+        from lib.motion.collision import CollisionConfig
+
+        with pytest.raises(ValueError, match="Model not found"):
+            CollisionConfig(model_path="/nonexistent/model.pth")
+
+    def test_missing_relative_model_raises_value_error(self):
+        from lib.motion.collision import CollisionConfig
+
+        with pytest.raises(ValueError, match="Model not found"):
+            CollisionConfig(model_path="assets/models/does_not_exist.pth")
