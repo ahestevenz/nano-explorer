@@ -1,6 +1,6 @@
 # 🤖 nano-explorer
-[![CI Tests](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml/badge.svg)](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml)
-[![Lint](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml/badge.svg)](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml)
+[![CI Tests](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/ahestevenz/nano-explorer/actions/workflows/tests.yml)
+[![Lint](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/ahestevenz/nano-explorer/actions/workflows/lint.yml)
 [![Python](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/downloads/release/python-360/)
 [![JetPack](https://img.shields.io/badge/JetPack-4.6.1-green.svg)](https://developer.nvidia.com/embedded/jetpack)
 [![Platform](https://img.shields.io/badge/platform-Jetson%20Nano-76b900.svg)](https://developer.nvidia.com/embedded/jetson-nano)
