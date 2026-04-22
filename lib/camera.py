@@ -1,0 +1,235 @@
+"""
+Unified camera abstraction for Jetson Nano.
+
+Supports:
+  - CSI camera via GStreamer + nvarguscamerasrc (best performance)
+  - USB camera via V4L2 / OpenCV VideoCapture
+
+Usage:
+    cam = Camera(width=640, height=480, fps=30, source="csi")
+    cam.open()
+    frame = cam.read()   # numpy BGR array
+    cam.release()
+
+    # Or as a context manager:
+    with Camera() as cam:
+        frame = cam.read()
+"""
+
+import threading
+
+import cv2
+import numpy as np
+from loguru import logger
+from pydantic import BaseModel, Field, validator
+
+from lib.network import get_wifi_ip
+
+# GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
+_GST_CSI_PIPELINE = (
+    "nvarguscamerasrc sensor-mode=2 ! "
+    "video/x-raw(memory:NVMM),width=1920,height=1080,framerate={fps}/1 ! "  # sensor native
+    "nvvidconv flip-method=0 ! "
+    "video/x-raw,width={w},height={h},format=BGRx ! "  # scale here
+    "videoconvert ! "
+    "video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
+)
+
+
+class FrameBuffer:
+    """Thread-safe single-frame buffer. Written by the main loop, read by MJPEG."""
+
+    def __init__(self):
+        self._frame = None
+        self._lock = threading.Lock()
+
+    def put(self, frame) -> None:
+        with self._lock:
+            self._frame = frame.copy()
+
+    def get(self):
+        with self._lock:
+            return self._frame
+
+
+class MjpegServer:
+    """
+    Serves frames from an external FrameBuffer over MJPEG.
+
+    The camera is owned and operated by the main teleop loop.
+    This class only encodes and streams whatever is in the buffer —
+    it never opens the camera itself, preventing NVARGUS session conflicts.
+    """
+
+    def __init__(self, port: int = 8080, fps: int = 30):
+        self.frame_buffer = FrameBuffer()
+        self._port = port
+        self._fps = fps
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self) -> None:
+        try:
+            from aiohttp import web  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "aiohttp not installed — camera stream unavailable. "
+                "Run: pip3 install 'aiohttp==3.7.4'"
+            )
+            return
+
+        import asyncio
+
+        async def _handler(request):
+            from aiohttp import web as _web
+
+            response = _web.StreamResponse()
+            response.content_type = "multipart/x-mixed-replace; boundary=frame"
+            await response.prepare(request)
+
+            while not self._stop_event.is_set():
+                frame = self.frame_buffer.get()
+
+                # Skip if buffer not yet filled or frame is empty
+                if frame is None or frame.size == 0:
+                    await asyncio.sleep(0.02)
+                    continue
+
+                success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if not success or jpeg is None:
+                    await asyncio.sleep(0.02)
+                    continue
+
+                data = b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+                try:
+                    await response.write(data)
+                except Exception:
+                    break
+                await asyncio.sleep(1.0 / self._fps)
+
+        def _serve():
+            async def _main():
+                from aiohttp import web as _web
+
+                app = _web.Application()
+                app.router.add_get("/stream", _handler)
+                runner = _web.AppRunner(app)
+                await runner.setup()
+                await _web.TCPSite(runner, port=self._port).start()
+                while not self._stop_event.is_set():
+                    await asyncio.sleep(0.5)
+                await runner.cleanup()
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_main())
+            finally:
+                loop.close()
+
+        self._thread = threading.Thread(target=_serve, daemon=True)
+        self._thread.start()
+        ip = get_wifi_ip()
+        nano_ip = ip if ip is not None else "<nano-ip>"
+        logger.success(
+            "Camera stream started — open " f"http://{nano_ip}:{self._port}/stream in your browser"
+        )
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        # Thread is a daemon — exits when main thread does.
+        # Camera is managed by the caller, not here.
+
+
+class CameraConfig(BaseModel):
+    """
+    Args:
+        width:     Capture width in pixels.
+        height:    Capture height in pixels.
+        fps:       Target frames per second.
+        source:    "csi" for the CSI ribbon camera, "usb" for a USB webcam.
+        device_id: V4L2 device index for USB cameras (ignored for CSI).
+    """
+
+    width: int = Field(640, gt=0)
+    height: int = Field(480, gt=0)
+    fps: int = Field(30, gt=0)
+    source: str = "csi"
+    device_id: int = Field(0, ge=0)
+
+    @validator("source")
+    def source_must_be_valid(cls, v):  # pylint: disable=no-self-argument
+        if v not in ("csi", "usb"):
+            raise ValueError("source must be 'csi' or 'usb'")
+        return v
+
+
+class Camera:
+    """
+    Thin wrapper around OpenCV VideoCapture, with a GStreamer pipeline
+    for the CSI camera and plain V4L2 for USB cameras.
+    """
+
+    def __init__(self, **kwargs):
+        self._config = CameraConfig(**kwargs)
+        self._cap = None
+
+    def open(self) -> None:
+        """Open the camera. Raises RuntimeError if it cannot be opened."""
+
+        if self._config.source == "csi":
+            pipeline = _GST_CSI_PIPELINE.format(
+                w=self._config.width, h=self._config.height, fps=self._config.fps
+            )
+            logger.info("Opening CSI camera via GStreamer pipeline")
+            self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        else:
+            logger.info(f"Opening USB camera at /dev/video{self._config.device_id}")
+            self._cap = cv2.VideoCapture(self._config.device_id)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
+            self._cap.set(cv2.CAP_PROP_FPS, self._config.fps)
+
+        if not self._cap.isOpened():
+            raise RuntimeError(
+                f"Cannot open {self._config.source} camera. "
+                "Check connections and run: v4l2-ctl --list-devices"
+            )
+        logger.success(
+            f"Camera ready: {self._config.width}x{self._config.height} @ {self._config.fps} fps"
+        )
+
+    def read(self) -> np.ndarray:
+        """
+        Read one frame.
+
+        Returns:
+            numpy.ndarray: BGR frame, shape (H, W, 3).
+
+        Raises:
+            RuntimeError: if the camera is not open or the read fails.
+        """
+        if self._cap is None or not self._cap.isOpened():
+            raise RuntimeError("Camera is not open. Call open() first.")
+        ret, frame = self._cap.read()
+        if not ret or frame is None:
+            raise RuntimeError("Failed to read frame from camera.")
+        return frame
+
+    def release(self) -> None:
+        """Release the camera resource."""
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+            logger.info("Camera released.")
+
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, *_):
+        self.release()
+
+    @property
+    def is_open(self) -> bool:
+        return self._cap is not None and self._cap.isOpened()

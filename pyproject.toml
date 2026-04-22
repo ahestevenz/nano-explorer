@@ -1,0 +1,126 @@
+[tool.ruff]
+# Target Python 3.6 (JetPack 4.6.1 / Jetson Nano B01)
+target-version = "py37"
+line-length = 100
+
+# Directories to check
+src = ["lib", "commands", "bin"]
+
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "B",    # flake8-bugbear
+    "I",    # isort
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+]
+
+ignore = [
+    "E203",  # whitespace before ':' (black-compatible)
+    "E501",  # line too long (black handles this)
+    "UP007", # Use X | Y for type unions (py3.10+, not available on 3.6)
+    "UP006", # Use type instead of Type (py3.9+)
+    "UP035", # typing imports (py3.9+)
+    "SIM108", # ternary operator (readability preference)
+    "E402", # module level import not at top of file
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports in __init__ re-exports
+"lib/*/__init__.py" = ["F401"]
+"commands/__init__.py" = ["F401"]
+# Tests can use assert and have magic values
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lib", "commands"]
+
+[tool.ruff.format]
+# Match black's style
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+
+[tool.black]
+line-length = 100
+target-version = ["py36"]
+exclude = '''
+/(
+    \.git
+  | __pycache__
+  | \.venv
+  | venv
+  | build
+  | dist
+)/
+'''
+
+[tool.pylint.master]
+jobs = 2
+init-hook = "import sys; sys.path.insert(0, '.')"
+
+[tool.pylint."messages control"]
+disable = [
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "C0301",  # line-too-long
+    "C0303",  # trailing-whitespace
+    "C0411",  # wrong-import-order
+    "C0413",  # wrong-import-position  ← add this
+    "W0611",  # unused-import
+    "W0612",  # unused-variable
+    "R0903",  # too-few-public-methods
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "W0212",  # protected-access
+    "W0703",  # broad-except
+    "W0107",  # unnecessary-pass
+    "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
+    "E0611",  # no-name-in-module
+]
+
+[tool.pylint.format]
+max-line-length = 100
+indent-string = "    "
+
+[tool.pylint.design]
+max-args = 10
+max-attributes = 15
+max-bool-expr = 6
+max-branches = 15
+max-returns = 8
+max-statements = 60
+
+[tool.pylint.similarities]
+min-similarity-lines = 8
+ignore-comments = true
+ignore-docstrings = true
+
+
+[tool.pylint.typecheck]
+ignored-modules = [
+    "jetbot", "jetson", "board", "busio",
+    "adafruit_pca9685", "adafruit_motor",
+    "cv2", "torch", "torchvision", "trt_pose", "torch2trt",
+    "pynput", "apriltag", "colorama", "aiohttp",
+]
+ignored-classes = ["jetbot.Robot"]
+
+[tool.pylint.basic]
+module-rgx = "[a-z][a-z0-9-]*"

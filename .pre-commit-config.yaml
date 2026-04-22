@@ -1,0 +1,63 @@
+# .pre-commit-config.yaml
+#
+# Install:
+#   pip3 install pre-commit
+#   pre-commit install          # installs git hook
+#   pre-commit run --all-files  # run manually on everything
+#
+# Targets Python 3.6 (JetPack 4.6.1 / Jetson Nano B01).
+# Run on your laptop/desktop — not on the Nano itself.
+#
+# Hooks (in order):
+#   1. pre-commit built-ins  — whitespace, file hygiene
+#   2. ruff                  — fast linter (replaces flake8 + isort + pyupgrade)
+#   3. black                 — opinionated code formatter
+#   4. pylint                — deep static analysis
+
+repos:
+
+  # ── 1. General file hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: debug-statements        # catches leftover pdb.set_trace()
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # ── 2. ruff — linter + import sorter ────────────────────────────────────────
+  # Replaces: flake8, flake8-bugbear, isort, pyupgrade
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.5
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format   # ruff's own formatter (black-compatible)
+
+  # ── 3. black — code formatter ────────────────────────────────────────────────
+  # Keep in sync with ruff-format; black is the reference formatter.
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        language_version: python3
+
+  # ── 4. pylint — deep static analysis ────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: pylint
+        name: pylint
+        entry: pylint
+        language: system
+        types: [python]
+        args:
+          - "--rcfile=pyproject.toml"
+          - "--score=no"
