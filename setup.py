@@ -5,7 +5,11 @@ setup(
     version="0.1.0",
     description="Modular CLI toolkit for the Waveshare JetBot / Jetson Nano B01",
     author="Your Name",
-    python_requires=">=3.6, <3.7",
+    # Note: this package is designed and tested for Python 3.6 (JetPack 4.6.1 / Jetson Nano B01).
+    # The constraint is relaxed here to allow CI to run on Python 3.10+ since GitHub Actions
+    # no longer provides Python 3.6 runners. Do not use this package outside a 3.6 environment
+    # in production — behaviour on newer Python versions is not guaranteed.
+    python_requires=">=3.6",
     packages=find_packages(exclude=["tests*"]),
     install_requires=[
         "PyYAML>=5.4.1",
