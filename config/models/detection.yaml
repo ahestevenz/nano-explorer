@@ -1,0 +1,26 @@
+# Object Detection Model Configuration
+# Used by: nano-explorer vision detect
+#
+# backend: "jetson-inference"  — TensorRT-optimised detectNet (recommended)
+#          "opencv-dnn"        — OpenCV DNN with CUDA backend
+#
+# jetson-inference model names (auto-downloaded on first use):
+#   ssd-mobilenet-v2      COCO 91 classes, ~40 FPS on Nano  ← default
+#   ssd-mobilenet-v1      COCO 91 classes
+#   ssd-inception-v2      COCO 91 classes, more accurate, slower
+#   pednet                pedestrian only
+#   multiped              pedestrian + cyclist
+#   facenet               face detection
+
+backend:   jetson-inference
+model:     ssd-mobilenet-v2
+threshold: 0.50
+
+# ── opencv-dnn (uncomment to use) ─────────────────────────────────────────────
+# backend:      opencv-dnn
+# model:        assets/models/MobileNetSSD_deploy.caffemodel
+# config:       assets/models/MobileNetSSD_deploy.prototxt
+# labels:       assets/models/coco_labels.txt
+# threshold:    0.50
+# input_width:  300
+# input_height: 300

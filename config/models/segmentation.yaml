@@ -1,0 +1,13 @@
+# Semantic Segmentation Configuration
+# Used by: nano-explorer vision segment
+#
+# Model names (jetson-inference, auto-downloaded on first use):
+#   fcn-resnet18-voc          Pascal VOC  — 21 classes  ← default
+#   fcn-resnet18-cityscapes   Cityscapes  — 19 urban classes
+#   fcn-resnet18-deepscene    Outdoor/forest scenes
+#   fcn-resnet18-mhp          Multi-Human Parsing — 15 body-part classes
+#   fcn-resnet18-sun          SUN RGB-D   — 37 indoor classes
+
+model:     fcn-resnet18-voc
+visualize: overlay   # "overlay" | "mask"
+threshold: 0.0

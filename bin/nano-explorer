@@ -72,13 +72,13 @@ def build_parser(settings: NanoSettings):
     register_motion(motion_parser, settings)
 
     # Computer vision
-    from commands.cmd_vision import register as register_vision  # pylint: disable=E0611, E0401
+    from commands.vision import register as register_vision # pylint: disable=E0611, E0401
 
     vision_parser = subparsers.add_parser(
         "vision",
         help="Object detection, tracking, segmentation, pose estimation",
     )
-    register_vision(vision_parser)
+    register_vision(vision_parser, settings)
 
     # Navigation & mapping
     from commands.cmd_navigation import register as register_nav  # pylint: disable=E0611, E0401

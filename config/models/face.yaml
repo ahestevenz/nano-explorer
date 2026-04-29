@@ -1,0 +1,21 @@
+# Face & People Detection Configuration
+# Used by: nano-explorer vision faces
+#
+# backend: "haar" — OpenCV Haar cascades (CPU, no downloads needed)
+#          "dnn"  — Caffe ResNet SSD (CUDA-accelerated, more accurate)
+
+backend:       haar
+cascade:       /usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml
+body_cascade:  /usr/share/opencv4/haarcascades/haarcascade_fullbody.xml
+scale_factor:  1.1
+min_neighbors: 5
+
+# ── DNN (uncomment to use) ────────────────────────────────────────────────────
+# Download:
+#   wget https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt
+#   wget https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel
+#
+# backend:   dnn
+# model:     assets/models/res10_300x300_ssd_iter_140000.caffemodel
+# config:    assets/models/deploy.prototxt
+# threshold: 0.60
