@@ -22,6 +22,7 @@ All torch / cv2 imports are deferred to run() so that importing this
 module never triggers the OpenBLAS SIGILL on the Nano at startup.
 """
 
+from enum import Enum
 from pathlib import Path
 
 import cv2
@@ -32,9 +33,11 @@ from pydantic import BaseModel, Field, validator
 from lib.camera import Camera, MjpegServer
 from lib.settings import PROJECT_ROOT_PATH
 
+
 class ObjectDetectorBackend(str, Enum):
-    JETSON_INFERENCE  = "jetson-inference"
+    JETSON_INFERENCE = "jetson-inference"
     OPENCV_DNN = "opencv-dnn"
+
 
 class DetectionConfig(BaseModel):
     """
@@ -56,8 +59,7 @@ class DetectionConfig(BaseModel):
     def config_must_exist(cls, v):  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(
-                f"Detection config not found: {v}\n"
-                f"Expected at: config/models/detection.yaml"
+                f"Detection config not found: {v}\nExpected at: config/models/detection.yaml"
             )
         return v
 
@@ -93,8 +95,7 @@ class ObjectDetector:
                 import jetson.inference as ji  # pylint: disable=import-error
             except ImportError as e:
                 raise RuntimeError(
-                    "jetson.inference not found. It ships with JetPack — "
-                    "check your installation."
+                    "jetson.inference not found. It ships with JetPack — check your installation."
                 ) from e
             self._net = ji.detectNet(cfg["model"], threshold=threshold)
             logger.success(f"Loaded jetson-inference model: {cfg['model']}")
@@ -151,9 +152,7 @@ class ObjectDetector:
                     bw, bh = int(det[2] * w), int(det[3] * h)
                     x1, y1 = cx - bw // 2, cy - bh // 2
                     label = (
-                        self._labels[class_id]
-                        if class_id < len(self._labels)
-                        else str(class_id)
+                        self._labels[class_id] if class_id < len(self._labels) else str(class_id)
                     )
                     results.append(
                         {"label": label, "conf": confidence, "bbox": (x1, y1, x1 + bw, y1 + bh)}
@@ -169,8 +168,14 @@ class ObjectDetector:
             label = f"{d['label']}  {d['conf']:.2f}"
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
-                out, label, (x1, max(y1 - 6, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1, cv2.LINE_AA,
+                out,
+                label,
+                (x1, max(y1 - 6, 0)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
             )
         return out
 
@@ -193,9 +198,7 @@ class ObjectDetector:
                         detections = self._detect_opencv(frame)
 
                     for d in detections:
-                        logger.info(
-                            f"  {d['label']:<22} conf={d['conf']:.2f}  bbox={d['bbox']}"
-                        )
+                        logger.info(f"  {d['label']:<22} conf={d['conf']:.2f}  bbox={d['bbox']}")
 
                     if self._server is not None:
                         self._server.frame_buffer.put(self.annotate(frame, detections))

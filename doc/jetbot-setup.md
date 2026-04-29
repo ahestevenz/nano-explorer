@@ -108,7 +108,85 @@ sudo python3 setup.py install
 ```
 ---
 
-## Step 7 — Verify Hardware
+## Step 7 — Install jetson-inference
+
+Clone the repository:
+
+```bash
+git clone --recursive --depth=1 https://github.com/dusty-nv/jetson-inference
+cd jetson-inference
+```
+
+Before building, two patches are required to make the CMake build compatible
+with **numpy 1.19.5** on JetPack 4.6.1. The `npymath` static library is not
+present in this numpy version and must be removed from both binding targets.
+
+**Patch 1** — `python/bindings/CMakeLists.txt`:
+
+```bash
+python3 - << 'PYEOF'
+import re
+path = "python/bindings/CMakeLists.txt"
+with open(path) as f:
+    content = f.read()
+patched = re.sub(r'(\s*)(.*npymath.*)', r'\1# \2', content)
+with open(path, "w") as f:
+    f.write(patched)
+print("Patch 1 applied.")
+PYEOF
+```
+
+**Patch 2** — `utils/python/bindings/CMakeLists.txt`:
+
+```bash
+python3 - << 'PYEOF'
+path = "utils/python/bindings/CMakeLists.txt"
+with open(path) as f:
+    lines = f.readlines()
+new_lines = [
+    "  # npymath removed — not available with numpy 1.19.5 on JetPack 4.6.1\n"
+    if "npymath" in line and not line.strip().startswith("#")
+    else line
+    for line in lines
+]
+with open(path, "w") as f:
+    f.writelines(new_lines)
+print("Patch 2 applied.")
+PYEOF
+```
+
+Verify both patches are clean before building:
+
+```bash
+grep -rn "npymath" python/bindings/CMakeLists.txt \
+                   utils/python/bindings/CMakeLists.txt \
+  | grep -v "^.*:.*#"
+# Should print nothing
+```
+
+Build and install:
+
+```bash
+mkdir build && cd build
+cmake -DPYTHON3_PACKAGES=ON ..
+make -j4
+sudo make install
+sudo ldconfig
+```
+
+Verify the installation:
+
+```bash
+python3 -c "import jetson_inference; print('jetson_inference OK')"
+python3 -c "import jetson_utils; print('jetson_utils OK')"
+```
+
+> **Note:** The older `jetson.inference` / `jetson.utils` dot-notation imports
+> still work but are deprecated. Use `jetson_inference` and `jetson_utils`
+> (underscore) in new code.
+---
+
+## Step 8 — Verify Hardware
 
 ### Camera
 ```bash
@@ -124,7 +202,7 @@ The motor driver (typically at address `0x40` or `0x60`) should appear in the gr
 
 ---
 
-## Step 8 — Verify Camera with GStreamer + OpenCV
+## Step 9 — Verify Camera with GStreamer + OpenCV
 
 Run this quick test to confirm the CSI camera pipeline is working end-to-end:
 ```bash
