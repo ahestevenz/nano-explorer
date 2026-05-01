@@ -12,9 +12,9 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.stream_mixin import StreamMixin
+from lib.camera import Camera
 from lib.motor import MotorController
-from lib.network import get_wifi_ip
 from lib.settings import PROJECT_ROOT_PATH
 
 
@@ -43,7 +43,7 @@ class CollisionConfig(BaseModel):
         return v
 
 
-class CollisionAvoider:
+class CollisionAvoider(StreamMixin):
     """
     Runs the collision avoidance loop.
 
@@ -57,9 +57,6 @@ class CollisionAvoider:
         self._model = None
         self._device = None
         self._transform = None
-        self._server = None
-        ip = get_wifi_ip()
-        self._nano_ip: str = ip if ip is not None else "<nano-ip>"
 
     def run(self) -> None:
         import torch
@@ -72,11 +69,8 @@ class CollisionAvoider:
 
         _stop_capture = threading.Event()
         if self._config.stream:
-            self._start_stream()
+            self._start_stream(stream_port=self._config.stream_port)
             self._start_capture_thread(cam, _stop_capture)
-            logger.info(
-                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
-            )
 
         logger.info(
             f"Collision avoidance running — "
@@ -98,7 +92,7 @@ class CollisionAvoider:
 
                 # push annotated frame to MJPEG stream if active
                 if self._config.stream and self._server is not None:
-                    self._server.frame_buffer.put(annotated)
+                    self._push_frame(annotated)
 
                 if prob > self._config.threshold:
                     motors.stop()
@@ -169,42 +163,6 @@ class CollisionAvoider:
             self._model = model.to(self._device).eval()
             logger.success(f"Loaded PyTorch model: {model_path}")
 
-    def _open_camera(self) -> Camera:
-        """Open the shared camera instance."""
-        cam = Camera()
-        cam.open()
-        return cam
-
-    def _close_camera(self, cam: Camera) -> None:
-        """Stop the MJPEG server first, then release the camera."""
-        if self._server is not None:
-            self._server.stop()
-            self._server = None
-        cam.release()
-
-    def _start_stream(self) -> None:
-        """Start the MJPEG server pointed at the shared frame buffer."""
-        self._server = MjpegServer(port=self._config.stream_port)
-        self._server.start()
-
-    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
-        """
-        Push frames from cam into the stream buffer in a dedicated thread.
-        Decouples capture rate from the inference loop so the stream
-        never stalls while the model is running.
-        """
-
-        def _loop():
-            while not stop_event.is_set():
-                try:
-                    frame = cam.read()
-                    self._server.frame_buffer.put(frame)
-                except Exception:
-                    break
-
-        t = threading.Thread(target=_loop, daemon=True)
-        t.start()
-        return t
 
     def _annotated_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
         annotated = frame.copy()

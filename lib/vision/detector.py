@@ -30,9 +30,11 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.stream_mixin import StreamMixin
+from lib.camera import Camera
 from lib.settings import PROJECT_ROOT_PATH
 
+_SCORE_THRESHOLD: float = 0.5
 
 class ObjectDetectorBackend(str, Enum):
     JETSON_INFERENCE = "jetson-inference"
@@ -64,7 +66,7 @@ class DetectionConfig(BaseModel):
         return v
 
 
-class ObjectDetector:
+class ObjectDetector(StreamMixin):
     """
     Model-agnostic object detector driven by a YAML config.
 
@@ -76,8 +78,6 @@ class ObjectDetector:
         self._net = None
         self._labels = []
         self._backend = None
-        self._server = None
-        self._threshold = self._config.threshold
 
     def _load(self) -> None:
         import yaml
@@ -85,25 +85,24 @@ class ObjectDetector:
         with open(self._config.config_path) as f:
             cfg = yaml.safe_load(f)
 
-        backend = cfg.get("backend", "jetson-inference")
-        self._backend = backend
-        threshold = self._config.threshold or cfg.get("threshold", 0.5)
-        self._threshold = threshold
+        self._backend = ObjectDetectorBackend(cfg.get("backend"))
+        self._threshold = self._config.threshold or cfg.get("threshold", _SCORE_THRESHOLD)
 
-        if backend == "jetson-inference":
+        if self._backend == ObjectDetectorBackend.JETSON_INFERENCE:
             try:
                 import jetson.inference as ji  # pylint: disable=import-error
             except ImportError as e:
                 raise RuntimeError(
                     "jetson.inference not found. It ships with JetPack — check your installation."
                 ) from e
-            self._net = ji.detectNet(cfg["model"], threshold=threshold)
-            logger.success(f"Loaded jetson-inference model: {cfg['model']}")
+            self._net = ji.detectNet(cfg["model"], threshold=self._threshold)
+            self._detect_fn = self._detect_jetsoni
+            logger.success(f"Loaded {ObjectDetectorBackend.JETSON_INFERENCE} model: {cfg['model']}")
 
-        elif backend == "opencv-dnn":
+        elif self._backend == ObjectDetectorBackend.OPENCV_DNN:
             for key in ("model", "config", "labels"):
                 if key not in cfg:
-                    raise ValueError(f"opencv-dnn backend requires '{key}' in config YAML")
+                    raise ValueError(f"{ObjectDetectorBackend.OPENCV_DNN} backend requires '{key}' in config YAML")
             self._net = cv2.dnn.readNet(cfg["model"], cfg["config"])
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
@@ -111,14 +110,15 @@ class ObjectDetector:
                 self._labels = [ln.strip() for ln in f]
             self._inp_w = cfg.get("input_width", 300)
             self._inp_h = cfg.get("input_height", 300)
+            self._detect_fn = self._detect_opencv
             logger.success(f"Loaded OpenCV DNN model: {cfg['model']}")
 
         else:
             raise ValueError(
-                f"Unknown backend '{backend}'. Choose 'jetson-inference' or 'opencv-dnn'."
+                f"Unknown backend '{self._backend}'. Choose: {[b.value for b in ObjectDetectorBackend]}."
             )
 
-    def _detect_jetsoni(self, frame):
+    def _detect_jetsoni(self, frame: np.ndarray)->list[dict]:
         """Run jetson-inference detectNet on a BGR frame."""
         import jetson.utils as ju  # pylint: disable=import-error
 
@@ -133,7 +133,7 @@ class ObjectDetector:
             for d in detections
         ]
 
-    def _detect_opencv(self, frame):
+    def _detect_opencv(self, frame: np.ndarray)->list[dict]:
         """Run OpenCV DNN detection on a BGR frame."""
         h, w = frame.shape[:2]
         blob = cv2.dnn.blobFromImage(
@@ -160,52 +160,61 @@ class ObjectDetector:
         return results
 
     @staticmethod
-    def annotate(frame: np.ndarray, detections: list) -> np.ndarray:
-        """Draw bounding boxes and labels on a copy of frame."""
+    def _annotated_frame(
+        self, frame: np.ndarray, detections: list
+    ) -> np.ndarray:
+        """Draw bounding boxes and labels onto a copy of frame."""
         out = frame.copy()
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
-            label = f"{d['label']}  {d['conf']:.2f}"
+            label = "{:<20} {:.2f}".format(d["label"], d["conf"])
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
-                out,
-                label,
+                out, label,
                 (x1, max(y1 - 6, 0)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
+                0.55, (0, 255, 0), 1, cv2.LINE_AA,
             )
+        # Detection count overlay
+        cv2.putText(
+            out,
+            "{} object(s)".format(len(detections)),
+            (10, out.shape[0] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6, (200, 200, 200), 1, cv2.LINE_AA,
+        )
         return out
 
     def run(self) -> None:
         self._load()
 
+        cam = self._open_camera()
+        _stop_capture = threading.Event()
+
         if self._config.stream:
-            self._server = MjpegServer(port=self._config.stream_port)
-            self._server.start()
+            self._start_stream(port=self.config.stream_port)
+            self._start_capture_thread(cam, _stop_capture)
 
-        with Camera() as cam:
-            logger.info("Object detection running — Ctrl+C to stop")
-            try:
-                while True:
-                    frame = cam.read()
+        logger.info("Object detection running — Ctrl+C to stop")
 
-                    if self._backend == "jetson-inference":
-                        detections = self._detect_jetsoni(frame)
-                    else:
-                        detections = self._detect_opencv(frame)
+        try:
+            while True:
+                frame      = cam.read()
+                detections = self._detect_fn(frame)
 
-                    for d in detections:
-                        logger.info(f"  {d['label']:<22} conf={d['conf']:.2f}  bbox={d['bbox']}")
+                for d in detections:
+                    logger.info(
+                        "  {:<22} conf={:.2f}  bbox={}".format(
+                            d["label"], d["conf"], d["bbox"]
+                        )
+                    )
 
-                    if self._server is not None:
-                        self._server.frame_buffer.put(self.annotate(frame, detections))
-
-            except KeyboardInterrupt:
-                pass
-            finally:
-                if self._server is not None:
-                    self._server.stop()
-                logger.info("Detector stopped.")
+                if self._config.stream and self._server is not None:
+                    self._push_frame(self._annotated_frame(frame, detections))
+                
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _stop_capture.set()
+            self._close_camera(cam)
+            logger.info("Detector stopped.")

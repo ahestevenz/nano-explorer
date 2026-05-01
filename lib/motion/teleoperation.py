@@ -39,9 +39,9 @@ import time
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.stream_mixin import StreamMixin
+from lib.camera import Camera
 from lib.motor import MotorController
-from lib.network import get_wifi_ip
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -154,7 +154,7 @@ class TeleopConfig(BaseModel):
         return v
 
 
-class TeleopController:
+class TeleopController(StreamMixin):
     """
     Keyboard-driven teleoperation controller.
 
@@ -167,9 +167,6 @@ class TeleopController:
         self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
         self._running = False
-        self._server = None
-        ip = get_wifi_ip()
-        self._nano_ip: str = ip if ip is not None else "<nano-ip>"
 
     def run(self) -> None:
         if self._config.mode == "auto":
@@ -182,24 +179,6 @@ class TeleopController:
             self._run_stdin()
         else:
             raise ValueError(f"Unknown teleop mode: {self._config.mode}")
-
-    def _open_camera(self) -> Camera:
-        """Open the single shared camera instance."""
-        cam = Camera()
-        cam.open()
-        return cam
-
-    def _close_camera(self, cam: Camera) -> None:
-        """Stop the MJPEG server first, then release the camera."""
-        if self._server is not None:
-            self._server.stop()
-            self._server = None
-        cam.release()
-
-    def _start_stream(self) -> None:
-        """Start the MJPEG server pointed at the shared frame buffer."""
-        self._server = MjpegServer(port=self._config.stream_port)
-        self._server.start()
 
     # Mode: auto
     def _run_auto(self) -> None:
@@ -232,9 +211,6 @@ class TeleopController:
             "\n[teleop] Arrow keys to drive  |  q = quit\n"
             "         Hold key -> move  |  Release -> stop\n"
         )
-        if self._config.stream:
-            url = f"http://{self._nano_ip}:{self._config.stream_port}/stream"
-            _help += f"         Camera stream -> {url}\n"
         print(_help)
 
         self._motors.open()
@@ -244,7 +220,7 @@ class TeleopController:
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
+            self._start_stream(port=self._config.stream_port)
             self._start_capture_thread(cam, _stop_capture)
 
         self._running = True
@@ -340,11 +316,8 @@ class TeleopController:
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
+            self._start_stream(port=self._config.stream_port)
             self._start_capture_thread(cam, _stop_capture)
-            logger.info(
-                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
-            )
 
         with kb.Listener(on_press=on_press, on_release=on_release) as listener:
             try:
@@ -370,9 +343,8 @@ class TeleopController:
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
+            self._start_stream(port=self._config.stream_port)
             self._start_capture_thread(cam, _stop_capture)
-            print(f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream\n")
         try:
             while True:
                 try:
@@ -411,22 +383,3 @@ class TeleopController:
         dispatch.get(action, self._motors.stop)()
         sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}  ")
         sys.stdout.flush()
-
-    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
-        """
-        Push frames from cam into the stream buffer in a dedicated thread.
-        Decouples capture rate from the input/control loop so the stream
-        never freezes while waiting for a keypress or blocking read().
-        """
-
-        def _loop():
-            while not stop_event.is_set():
-                try:
-                    frame = cam.read()
-                    self._server.frame_buffer.put(frame)
-                except Exception:
-                    break
-
-        t = threading.Thread(target=_loop, daemon=True)
-        t.start()
-        return t
