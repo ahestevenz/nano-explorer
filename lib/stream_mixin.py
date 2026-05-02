@@ -70,19 +70,13 @@ class StreamMixin:
             self._server = None
         cam.release()
 
-    def _start_stream(self, stream_port: int) -> None:
+    def _start_server_stream(self, stream_port: int) -> None:
         """Start the MJPEG server pointed at the shared frame buffer."""
         self._server = MjpegServer(port=stream_port)
         self._server.start()
-        logger.info(
-            "Camera stream -> http://{}:{}/stream".format(
-                self._nano_ip, stream_port
-            )
-        )
+        logger.info("Camera stream -> http://{}:{}/stream".format(self._nano_ip, stream_port))
 
-    def _start_capture_thread(
-        self, cam: Camera, stop_event: threading.Event
-    ) -> threading.Thread:
+    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
         """
         Push frames from cam into the MJPEG frame buffer in a dedicated thread.
 
@@ -109,13 +103,11 @@ class StreamMixin:
         t.start()
         return t
 
-    def _start_stream(
-        self, cam: Camera, stop_event: threading.Event
-    ) -> None:
+    def _start_stream(self, cam: Camera, stop_event: threading.Event, stream_port: int) -> None:
         """
         Start the stream and capture thread in one call if stream=True.
         """
-        self._start_stream()
+        self._start_server_stream(stream_port=stream_port)
         self._start_capture_thread(cam, stop_event)
 
     def _push_frame(self, frame) -> None:

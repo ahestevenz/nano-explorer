@@ -12,10 +12,10 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.stream_mixin import StreamMixin
 from lib.camera import Camera
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
+from lib.stream_mixin import StreamMixin
 
 
 class CollisionConfig(BaseModel):
@@ -53,6 +53,7 @@ class CollisionAvoider(StreamMixin):
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = CollisionConfig(**kwargs)
         self._model = None
         self._device = None
@@ -69,8 +70,9 @@ class CollisionAvoider(StreamMixin):
 
         _stop_capture = threading.Event()
         if self._config.stream:
-            self._start_stream(stream_port=self._config.stream_port)
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
 
         logger.info(
             f"Collision avoidance running — "
@@ -162,7 +164,6 @@ class CollisionAvoider(StreamMixin):
             model.load_state_dict(state_dict)
             self._model = model.to(self._device).eval()
             logger.success(f"Loaded PyTorch model: {model_path}")
-
 
     def _annotated_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
         annotated = frame.copy()

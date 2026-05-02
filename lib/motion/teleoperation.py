@@ -39,9 +39,8 @@ import time
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.stream_mixin import StreamMixin
-from lib.camera import Camera
 from lib.motor import MotorController
+from lib.stream_mixin import StreamMixin
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -164,6 +163,7 @@ class TeleopController(StreamMixin):
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
         self._running = False
@@ -220,8 +220,9 @@ class TeleopController(StreamMixin):
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream(port=self._config.stream_port)
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
 
         self._running = True
         stop_timer = None  # threading.Timer
@@ -316,8 +317,9 @@ class TeleopController(StreamMixin):
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream(port=self._config.stream_port)
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
 
         with kb.Listener(on_press=on_press, on_release=on_release) as listener:
             try:
@@ -343,8 +345,9 @@ class TeleopController(StreamMixin):
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream(port=self._config.stream_port)
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
         try:
             while True:
                 try:
