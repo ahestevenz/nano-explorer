@@ -22,19 +22,21 @@ All torch / cv2 imports are deferred to run() so that importing this
 module never triggers the OpenBLAS SIGILL on the Nano at startup.
 """
 
+import threading
 from enum import Enum
 from pathlib import Path
+from typing import List
 
 import cv2
 import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.stream_mixin import StreamMixin
-from lib.camera import Camera
 from lib.settings import PROJECT_ROOT_PATH
+from lib.stream_mixin import StreamMixin
 
 _SCORE_THRESHOLD: float = 0.5
+
 
 class ObjectDetectorBackend(str, Enum):
     JETSON_INFERENCE = "jetson-inference"
@@ -74,13 +76,25 @@ class ObjectDetector(StreamMixin):
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = DetectionConfig(**kwargs)
         self._net = None
         self._labels = []
         self._backend = None
 
     def _load(self) -> None:
+        import os
+        import signal
+
         import yaml
+
+        # Suppress TensorRT / jetson_inference verbose logging
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ.setdefault("GLOG_minloglevel", "3")  # suppress glog
+        os.environ.setdefault("TRT_LOGGER_VERBOSITY", "0")  # suppress TRT
+
+        # Restore default SIGINT so Ctrl+C works even during TRT model loading
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         with open(self._config.config_path) as f:
             cfg = yaml.safe_load(f)
@@ -102,7 +116,9 @@ class ObjectDetector(StreamMixin):
         elif self._backend == ObjectDetectorBackend.OPENCV_DNN:
             for key in ("model", "config", "labels"):
                 if key not in cfg:
-                    raise ValueError(f"{ObjectDetectorBackend.OPENCV_DNN} backend requires '{key}' in config YAML")
+                    raise ValueError(
+                        f"{ObjectDetectorBackend.OPENCV_DNN} backend requires '{key}' in config YAML"
+                    )
             self._net = cv2.dnn.readNet(cfg["model"], cfg["config"])
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
@@ -118,7 +134,7 @@ class ObjectDetector(StreamMixin):
                 f"Unknown backend '{self._backend}'. Choose: {[b.value for b in ObjectDetectorBackend]}."
             )
 
-    def _detect_jetsoni(self, frame: np.ndarray)->list[dict]:
+    def _detect_jetsoni(self, frame: np.ndarray) -> List[dict]:
         """Run jetson-inference detectNet on a BGR frame."""
         import jetson.utils as ju  # pylint: disable=import-error
 
@@ -133,7 +149,7 @@ class ObjectDetector(StreamMixin):
             for d in detections
         ]
 
-    def _detect_opencv(self, frame: np.ndarray)->list[dict]:
+    def _detect_opencv(self, frame: np.ndarray) -> List[dict]:
         """Run OpenCV DNN detection on a BGR frame."""
         h, w = frame.shape[:2]
         blob = cv2.dnn.blobFromImage(
@@ -160,9 +176,7 @@ class ObjectDetector(StreamMixin):
         return results
 
     @staticmethod
-    def _annotated_frame(
-        self, frame: np.ndarray, detections: list
-    ) -> np.ndarray:
+    def _annotated_frame(frame: np.ndarray, detections: list) -> np.ndarray:
         """Draw bounding boxes and labels onto a copy of frame."""
         out = frame.copy()
         for d in detections:
@@ -170,10 +184,14 @@ class ObjectDetector(StreamMixin):
             label = "{:<20} {:.2f}".format(d["label"], d["conf"])
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
-                out, label,
+                out,
+                label,
                 (x1, max(y1 - 6, 0)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55, (0, 255, 0), 1, cv2.LINE_AA,
+                0.55,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
             )
         # Detection count overlay
         cv2.putText(
@@ -181,37 +199,44 @@ class ObjectDetector(StreamMixin):
             "{} object(s)".format(len(detections)),
             (10, out.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6, (200, 200, 200), 1, cv2.LINE_AA,
+            0.6,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
         )
         return out
 
     def run(self) -> None:
+        import signal
+
+        # Ensure Ctrl+C is always catchable
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
         self._load()
 
         cam = self._open_camera()
         _stop_capture = threading.Event()
 
         if self._config.stream:
-            self._start_stream(port=self.config.stream_port)
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
 
         logger.info("Object detection running — Ctrl+C to stop")
 
         try:
             while True:
-                frame      = cam.read()
+                frame = cam.read()
                 detections = self._detect_fn(frame)
 
                 for d in detections:
                     logger.info(
-                        "  {:<22} conf={:.2f}  bbox={}".format(
-                            d["label"], d["conf"], d["bbox"]
-                        )
+                        "  {:<22} conf={:.2f}  bbox={}".format(d["label"], d["conf"], d["bbox"])
                     )
 
                 if self._config.stream and self._server is not None:
                     self._push_frame(self._annotated_frame(frame, detections))
-                
+
         except KeyboardInterrupt:
             pass
         finally:
