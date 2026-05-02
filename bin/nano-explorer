@@ -22,7 +22,7 @@ os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
 import argparse
 import sys
 
-from colorama import Fore, init
+from colorama import Fore, Style, init
 
 from lib.settings import NanoSettings
 
@@ -38,9 +38,11 @@ BANNER = (
   ██║ ╚████║██║  ██║██║ ╚████║╚██████╔╝
   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝
   """
-    # + Fore.WHITE
-    # + "  E X P L O R E R   —   Waveshare JetBot / Jetson Nano B01\n"
-    # + Style.RESET_ALL
+    + Fore.WHITE
+    + Fore.RED
+    + Style.BRIGHT
+    + "  E X P L O R E R\n"
+    + Style.RESET_ALL
 )
 
 
@@ -72,7 +74,7 @@ def build_parser(settings: NanoSettings):
     register_motion(motion_parser, settings)
 
     # Computer vision
-    from commands.vision import register as register_vision # pylint: disable=E0611, E0401
+    from commands.vision import register as register_vision  # pylint: disable=E0611, E0401
 
     vision_parser = subparsers.add_parser(
         "vision",

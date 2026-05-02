@@ -242,4 +242,6 @@ class ObjectDetector(StreamMixin):
         finally:
             _stop_capture.set()
             self._close_camera(cam)
+            if self._server is not None:
+                self._server.stop()
             logger.info("Detector stopped.")

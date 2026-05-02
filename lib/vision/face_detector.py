@@ -31,10 +31,9 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera, MjpegServer
 from lib.settings import PROJECT_ROOT_PATH
+from lib.stream_mixin import StreamMixin
 
-_DEFAULT_CASCADE = (
-    "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
-)
+_DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
 
 
 class FaceDetectionConfig(BaseModel):
@@ -58,7 +57,7 @@ class FaceDetectionConfig(BaseModel):
         return v
 
 
-class FaceDetector:
+class FaceDetector(StreamMixin):
     """
     Face / people detector backed by Haar cascades or OpenCV DNN.
 
@@ -66,14 +65,13 @@ class FaceDetector:
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = FaceDetectionConfig(**kwargs)
         self._backend = None
         self._face_cascade = None
         self._body_cascade = None
         self._net = None
         self._threshold = 0.5
-        self._server = None
-
 
     def _load(self) -> None:
         import yaml
@@ -113,7 +111,6 @@ class FaceDetector:
         else:
             raise ValueError(f"Unknown backend '{self._backend}'. Choose 'haar' or 'dnn'.")
 
-
     def _detect_haar(self, frame) -> list:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self._face_cascade.detectMultiScale(gray, self._scale, self._neigh)
@@ -135,13 +132,11 @@ class FaceDetector:
             conf = float(dets[0, 0, i, 2])
             if conf > self._threshold:
                 box = (dets[0, 0, i, 3:7] * [w, h, w, h]).astype(int)
-                results.append({"label": "face", "conf": conf,
-                                 "bbox": tuple(box.tolist())})
+                results.append({"label": "face", "conf": conf, "bbox": tuple(box.tolist())})
         return results
 
-
     @staticmethod
-    def annotate(frame: np.ndarray, detections: list) -> np.ndarray:
+    def annotate_frame(frame: np.ndarray, detections: list) -> np.ndarray:
         out = frame.copy()
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
@@ -149,8 +144,14 @@ class FaceDetector:
             text = f"{d['label']}  {conf:.2f}" if conf else d["label"]
             cv2.rectangle(out, (x1, y1), (x2, y2), (255, 80, 0), 2)
             cv2.putText(
-                out, text, (x1, max(y1 - 6, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 80, 0), 1, cv2.LINE_AA,
+                out,
+                text,
+                (x1, max(y1 - 6, 0)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 80, 0),
+                1,
+                cv2.LINE_AA,
             )
         return out
 
@@ -159,8 +160,7 @@ class FaceDetector:
         detect_fn = self._detect_haar if self._backend == "haar" else self._detect_dnn
 
         if self._config.stream:
-            self._server = MjpegServer(port=self._config.stream_port)
-            self._server.start()
+            self._start_server_stream(stream_port=self._config.stream_port)
 
         with Camera() as cam:
             logger.info("Face detection running — Ctrl+C to stop")
@@ -171,10 +171,11 @@ class FaceDetector:
                     for r in results:
                         logger.info(r)
                     if self._server is not None:
-                        self._server.frame_buffer.put(self.annotate(frame, results))
+                        self._push_frame(self.annotate_frame(frame, results))
             except KeyboardInterrupt:
                 pass
             finally:
                 if self._server is not None:
                     self._server.stop()
+                self._close_camera(cam)
                 logger.info("Face detector stopped.")
