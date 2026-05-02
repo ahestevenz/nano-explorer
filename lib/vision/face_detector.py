@@ -22,6 +22,7 @@ YAML fields (config/models/face.yaml):
     threshold:     float (default 0.5)
 """
 
+from enum import Enum
 from pathlib import Path
 
 import cv2
@@ -29,11 +30,16 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.camera import Camera
 from lib.settings import PROJECT_ROOT_PATH
 from lib.stream_mixin import StreamMixin
 
 _DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
+
+
+class FaceDetectorBackend(str, Enum):
+    HAAR = "haar"
+    DNN = "dnn"
 
 
 class FaceDetectionConfig(BaseModel):
@@ -79,9 +85,8 @@ class FaceDetector(StreamMixin):
         with open(self._config.config_path) as f:
             cfg = yaml.safe_load(f)
 
-        self._backend = cfg.get("backend", "haar")
-
-        if self._backend == "haar":
+        self._backend = FaceDetectorBackend(cfg.get("backend"))
+        if self._backend == FaceDetectorBackend.HAAR:
             cascade_path = cfg.get("cascade", _DEFAULT_CASCADE)
             self._face_cascade = cv2.CascadeClassifier(cascade_path)
             if self._face_cascade.empty():
@@ -98,7 +103,7 @@ class FaceDetector(StreamMixin):
             self._neigh = cfg.get("min_neighbors", 5)
             logger.success("Loaded Haar cascade face detector.")
 
-        elif self._backend == "dnn":
+        elif self._backend == FaceDetectorBackend.DNN:
             for key in ("model", "config"):
                 if key not in cfg:
                     raise ValueError(f"dnn backend requires '{key}' in config YAML")
@@ -109,7 +114,9 @@ class FaceDetector(StreamMixin):
             logger.success(f"Loaded DNN face detector: {cfg['model']}")
 
         else:
-            raise ValueError(f"Unknown backend '{self._backend}'. Choose 'haar' or 'dnn'.")
+            raise ValueError(
+                f"Unknown backend '{self._backend}'. Choose: {[b.value for b in FaceDetectorBackend]} ."
+            )
 
     def _detect_haar(self, frame) -> list:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
