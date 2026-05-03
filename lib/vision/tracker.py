@@ -18,29 +18,27 @@ Steering law (proportional):
 When the target is lost the robot turns slowly to search.
 """
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.camera import Camera
 from lib.motor import MotorController
-from lib.settings import PROJECT_ROOT_PATH
+from lib.stream_mixin import StreamMixin
 
 # HSV ranges for common colours (OpenCV hue: 0–179)
 _COLOR_RANGES = {
-    "red":    ([0, 100, 100],  [10, 255, 255],  [160, 100, 100], [179, 255, 255]),
-    "green":  ([40, 60, 60],   [80, 255, 255],  None,            None),
-    "blue":   ([100, 100, 60], [130, 255, 255], None,            None),
-    "yellow": ([20, 100, 100], [35, 255, 255],  None,            None),
-    "orange": ([10, 100, 100], [20, 255, 255],  None,            None),
+    "red": ([0, 100, 100], [10, 255, 255], [160, 100, 100], [179, 255, 255]),
+    "green": ([40, 60, 60], [80, 255, 255], None, None),
+    "blue": ([100, 100, 60], [130, 255, 255], None, None),
+    "yellow": ([20, 100, 100], [35, 255, 255], None, None),
+    "orange": ([10, 100, 100], [20, 255, 255], None, None),
 }
 
 _VALID_COLORS = list(_COLOR_RANGES.keys())
-_VALID_MODES  = ["color", "blob", "object"]
-_Kp = 0.4    # proportional steering gain
+_VALID_MODES = ["color", "blob", "object"]
+_Kp = 0.4  # proportional steering gain
 _MIN_AREA = 500
 
 
@@ -77,7 +75,7 @@ class TrackerConfig(BaseModel):
         return v
 
 
-class ObjectTracker:
+class ObjectTracker(StreamMixin):
     """
     Track a visual target and steer the robot toward it.
 
@@ -85,6 +83,7 @@ class ObjectTracker:
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = TrackerConfig(**kwargs)
         self._motors = MotorController()
         self._server = None
@@ -138,7 +137,7 @@ class ObjectTracker:
         self._motors.steer(self._config.speed, _Kp * error)
 
     @staticmethod
-    def annotate(frame: np.ndarray, centroid) -> np.ndarray:
+    def annotate_frame(frame: np.ndarray, centroid) -> np.ndarray:
         out = frame.copy()
         h, w = out.shape[:2]
         cv2.line(out, (w // 2, 0), (w // 2, h), (200, 200, 200), 1)
@@ -151,8 +150,7 @@ class ObjectTracker:
         self._motors.open()
 
         if self._config.stream:
-            self._server = MjpegServer(port=self._config.stream_port)
-            self._server.start()
+            self._start_server_stream(stream_port=self._config.stream_port)
 
         logger.info(
             f"Tracker started — mode={self._config.mode}  "
@@ -174,7 +172,7 @@ class ObjectTracker:
                     self._steer_to(frame, centroid)
 
                     if self._server is not None:
-                        self._server.frame_buffer.put(self.annotate(frame, centroid))
+                        self._push_frame(self.annotate_frame(frame, centroid))
 
             except KeyboardInterrupt:
                 pass
