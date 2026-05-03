@@ -22,18 +22,19 @@ from pathlib import Path
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.camera import Camera
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
-from lib.vision.pose import PoseEstimator, PoseConfig
+from lib.stream_mixin import StreamMixin
+from lib.vision.pose import PoseConfig, PoseEstimator
 
 _KP = {
-    "left_shoulder":  5,
+    "left_shoulder": 5,
     "right_shoulder": 6,
-    "left_wrist":     9,
-    "right_wrist":   10,
-    "left_hip":      11,
-    "right_hip":     12,
+    "left_wrist": 9,
+    "right_wrist": 10,
+    "left_hip": 11,
+    "right_hip": 12,
 }
 
 _MARGIN = 0.05  # normalised coordinate deadband
@@ -62,7 +63,7 @@ class GestureConfig(BaseModel):
         return v
 
 
-class GestureController:
+class GestureController(StreamMixin):
     """
     Interpret body gestures and drive the JetBot accordingly.
 
@@ -70,9 +71,9 @@ class GestureController:
     """
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._config = GestureConfig(**kwargs)
         self._motors = MotorController()
-        self._server = None
         # Build PoseEstimator sharing the same config path
         self._estimator = PoseEstimator(
             **PoseConfig(
@@ -96,15 +97,20 @@ class GestureController:
             # peaks are (y_norm, x_norm)
             return float(peaks[0, idx, k, 1]), float(peaks[0, idx, k, 0])  # (x, y)
 
-        ls = kp("left_shoulder");   rs = kp("right_shoulder")
-        lw = kp("left_wrist");      rw = kp("right_wrist")
-        lh = kp("left_hip");        rh = kp("right_hip")
+        ls = kp("left_shoulder")
+        rs = kp("right_shoulder")
+        lw = kp("left_wrist")
+        rw = kp("right_wrist")
+        lh = kp("left_hip")
+        rh = kp("right_hip")
 
         if None in (ls, rs, lw, rw):
             return "none"
 
-        ls_x, ls_y = ls;  rs_x, rs_y = rs
-        lw_x, lw_y = lw;  rw_x, rw_y = rw
+        ls_x, ls_y = ls
+        rs_x, rs_y = rs
+        lw_x, lw_y = lw
+        rw_x, rw_y = rw
 
         # Both wrists above shoulders → forward  (lower y = higher in image)
         if lw_y < ls_y - _MARGIN and rw_y < rs_y - _MARGIN:
@@ -112,7 +118,8 @@ class GestureController:
 
         # Both wrists below hips → backward
         if lh and rh:
-            _, lh_y = lh;  _, rh_y = rh
+            _, lh_y = lh
+            _, rh_y = rh
             if lw_y > lh_y + _MARGIN and rw_y > rh_y + _MARGIN:
                 return "backward"
 
@@ -135,16 +142,15 @@ class GestureController:
         self._motors.open()
 
         if self._config.stream:
-            self._server = MjpegServer(port=self._config.stream_port)
-            self._server.start()
+            self._start_server_stream(stream_port=self._config.stream_port)
 
         dispatch = {
-            "forward":  lambda: self._motors.forward(self._config.speed),
+            "forward": lambda: self._motors.forward(self._config.speed),
             "backward": lambda: self._motors.backward(self._config.speed),
-            "left":     lambda: self._motors.turn_left(self._config.speed * 0.6),
-            "right":    lambda: self._motors.turn_right(self._config.speed * 0.6),
-            "stop":     self._motors.stop,
-            "none":     self._motors.stop,
+            "left": lambda: self._motors.turn_left(self._config.speed * 0.6),
+            "right": lambda: self._motors.turn_right(self._config.speed * 0.6),
+            "stop": self._motors.stop,
+            "none": self._motors.stop,
         }
 
         logger.info(
@@ -173,7 +179,7 @@ class GestureController:
 
                     if self._server is not None:
                         annotated = self._estimator.annotate(frame, counts, objects, peaks)
-                        self._server.frame_buffer.put(annotated)
+                        self._push_frame(annotated)
 
             except KeyboardInterrupt:
                 pass
