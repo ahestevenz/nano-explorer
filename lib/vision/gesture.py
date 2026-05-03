@@ -178,7 +178,7 @@ class GestureController(StreamMixin):
                     logger.debug(f"Gesture: {gesture}")
 
                     if self._server is not None:
-                        annotated = self._estimator.annotate(frame, counts, objects, peaks)
+                        annotated = self._estimator.annotate_frame(frame, counts, objects, peaks)
                         self._push_frame(annotated)
 
             except KeyboardInterrupt:

@@ -12,7 +12,6 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
 from lib.stream_mixin import StreamMixin

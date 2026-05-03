@@ -184,9 +184,56 @@ python3 -c "import jetson_utils; print('jetson_utils OK')"
 > **Note:** The older `jetson.inference` / `jetson.utils` dot-notation imports
 > still work but are deprecated. Use `jetson_inference` and `jetson_utils`
 > (underscore) in new code.
+
 ---
 
-## Step 8 — Verify Hardware
+## Step 8 — Install torch2trt and trt_pose (Pose Estimation)
+
+Required for `nano-explorer vision pose` and `nano-explorer vision gesture`.
+
+### Dependencies
+
+```bash
+pip3 install tqdm cython pycocotools
+```
+
+### Install torch2trt
+
+```bash
+cd ~/code
+git clone https://github.com/NVIDIA-AI-IOT/torch2trt
+cd torch2trt
+git checkout 9a048b0
+python3 setup.py install   # use your virtualenv python3, not sudo
+```
+
+### Install trt_pose
+
+```bash
+cd ~/code
+git clone https://github.com/NVIDIA-AI-IOT/trt_pose
+cd trt_pose
+python3 setup.py install
+```
+
+### Copy the topology file into the package
+
+trt_pose does not install `human_pose.json` into the package directory.
+Copy it manually so `pose.py` can find it:
+
+```bash
+cp ~/code/trt_pose/tasks/human_pose/human_pose.json \
+   ~/.virtualenvs/nano_explorer_py36/lib/python3.6/site-packages/trt_pose-0.0.1-py3.6-linux-aarch64.egg/trt_pose/
+```
+
+### Download model weights
+
+The official Google Drive link is currently inaccessible.
+Download the weights manually from a browser on your laptop:
+
+---
+
+## Step 9 — Verify Hardware
 
 ### Camera
 ```bash
@@ -202,7 +249,7 @@ The motor driver (typically at address `0x40` or `0x60`) should appear in the gr
 
 ---
 
-## Step 9 — Verify Camera with GStreamer + OpenCV
+## Step 10 — Verify Camera with GStreamer + OpenCV
 
 Run this quick test to confirm the CSI camera pipeline is working end-to-end:
 ```bash
