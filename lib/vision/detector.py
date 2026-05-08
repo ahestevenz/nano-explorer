@@ -25,7 +25,7 @@ module never triggers the OpenBLAS SIGILL on the Nano at startup.
 import threading
 from enum import Enum
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import cv2
 import numpy as np
@@ -33,7 +33,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.settings import PROJECT_ROOT_PATH
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 _SCORE_THRESHOLD: float = 0.5
 
@@ -52,15 +52,19 @@ class DetectionConfig(BaseModel):
         threshold:   Confidence threshold override (0.0–1.0).
         stream:      Serve annotated MJPEG stream while running.
         stream_port: MJPEG server port.
+        speed:       Motor speed [0.0, 1.0].
+        turn_gain:   Differential turn gain [0.0, 1.0].
     """
 
     config_path: Path = PROJECT_ROOT_PATH / "config/models/detection.yaml"
     threshold: float = Field(0.5, ge=0.0, le=1.0)
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
     @validator("config_path")
-    def config_must_exist(cls, v):  # pylint: disable=no-self-argument
+    def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(
                 f"Detection config not found: {v}\nExpected at: config/models/detection.yaml"
@@ -68,14 +72,14 @@ class DetectionConfig(BaseModel):
         return v
 
 
-class ObjectDetector(StreamMixin):
+class ObjectDetector(CameraMotionMixIn):
     """
     Model-agnostic object detector driven by a YAML config.
 
     Construct via ObjectDetector(**config.dict()).
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__()
         self._config = DetectionConfig(**kwargs)
         self._net = None
@@ -176,7 +180,7 @@ class ObjectDetector(StreamMixin):
         return results
 
     @staticmethod
-    def _annotated_frame(frame: np.ndarray, detections: list) -> np.ndarray:
+    def _annotated_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
         """Draw bounding boxes and labels onto a copy of frame."""
         out = frame.copy()
         for d in detections:
@@ -215,17 +219,19 @@ class ObjectDetector(StreamMixin):
         self._load()
 
         cam = self._open_camera()
-        _stop_capture = threading.Event()
+        _stop = threading.Event()
 
         if self._config.stream:
             self._start_stream(
-                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+                cam=cam, stop_event=_stop, stream_port=self._config.stream_port
             )
+
+        self._start_teleop_thread(_stop, self._config.speed, self._config.turn_gain)
 
         logger.info("Object detection running — Ctrl+C to stop")
 
         try:
-            while True:
+            while not _stop.is_set():
                 frame = cam.read()
                 detections = self._detect_fn(frame)
 
@@ -240,7 +246,7 @@ class ObjectDetector(StreamMixin):
         except KeyboardInterrupt:
             pass
         finally:
-            _stop_capture.set()
+            _stop.set()
             self._close_camera(cam)
             if self._server is not None:
                 self._server.stop()

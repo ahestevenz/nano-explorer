@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 
 class CollisionConfig(BaseModel):
@@ -42,7 +42,7 @@ class CollisionConfig(BaseModel):
         return v
 
 
-class CollisionAvoider(StreamMixin):
+class CollisionAvoider(CameraMotionMixIn):
     """
     Runs the collision avoidance loop.
 

@@ -35,12 +35,13 @@ import os
 import sys
 import threading
 import time
+from typing import Any, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.motor import MotorController
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -56,7 +57,7 @@ _TIME_OUT: float = 0.05
 _NUMBER_BYTES_TO_READ: int = 3
 
 
-def _import_keyboard():
+def _import_keyboard() -> Any:
     """
     Try every available pynput backend in order.
     Returns kb module on success, raises RuntimeError if all fail.
@@ -125,7 +126,6 @@ _STDIN_MAP = {
     "quit": "quit",
 }
 
-
 class TeleopConfig(BaseModel):
     """
     Robot teleoperation controller config
@@ -146,14 +146,14 @@ class TeleopConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
 
     @validator("mode")
-    def mode_must_be_valid(cls, v):  # pylint: disable=no-self-argument
+    def mode_must_be_valid(cls, v: str) -> str:  # pylint: disable=no-self-argument
         allowed = {"auto", "arrows", "pynput", "stdin"}
         if v not in allowed:
             raise ValueError(f"mode must be one of {allowed}")
         return v
 
 
-class TeleopController(StreamMixin):
+class TeleopController(CameraMotionMixIn):
     """
     Keyboard-driven teleoperation controller.
 
@@ -162,11 +162,10 @@ class TeleopController(StreamMixin):
     argparse values directly.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__()
         self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
-        self._running = False
 
     def run(self) -> None:
         if self._config.mode == "auto":
@@ -198,34 +197,36 @@ class TeleopController(StreamMixin):
         self._run_stdin()
 
     # Mode: raw arrow keys
-    def _run_arrows(self) -> None:
+    def _run_arrows(self, stop_event: Optional[threading.Event] = None) -> None:
         """
         Read raw terminal bytes.  Arrow keys produce 3-byte escape sequences.
         A background timer stops the robot if no key arrives within _KEY_TIMEOUT.
+
+        Args:
+            stop_event: Optional shared threading.Event. When provided (vision+teleop
+                        mode) both sides signal each other through this event. When
+                        omitted (standalone teleop) an internal event is used.
         """
+        print(
+            "\n[teleop] Arrow keys to drive  |  q = quit\n"
+            "         Hold key -> move  |  Release -> stop\n"
+        )
+
         import select
         import termios
         import tty
 
-        _help = (
-            "\n[teleop] Arrow keys to drive  |  q = quit\n"
-            "         Hold key -> move  |  Release -> stop\n"
-        )
-        print(_help)
-
         self._motors.open()
         cam = None
+        _stop = stop_event if stop_event is not None else threading.Event()
 
-        # Start MJPEG server only after camera is confirmed open
-        _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
             self._start_stream(
-                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+                cam=cam, stop_event=_stop, stream_port=self._config.stream_port
             )
 
-        self._running = True
-        stop_timer = None  # threading.Timer
+        stop_timer = None
 
         def _schedule_stop() -> None:
             nonlocal stop_timer
@@ -237,36 +238,29 @@ class TeleopController(StreamMixin):
 
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
-
         try:
             tty.setraw(fd)
-
-            while self._running:
+            while not _stop.is_set():
                 ready, _, _ = select.select([sys.stdin], [], [], _TIME_OUT)
                 if not ready:
                     continue
-
                 chunk = os.read(fd, _NUMBER_BYTES_TO_READ)
-
                 if chunk in (b"q", b"Q", b"\x03"):
+                    _stop.set()
                     break
-
                 action = _ARROW_MAP.get(chunk)
                 if action is None:
                     continue
-
                 self._apply_action(action)
                 _schedule_stop()
-
         except Exception as exc:
-            logger.error(f"Arrow teleop error: {exc}")
+            logger.error("Arrow teleop error: {}".format(exc))
         finally:
             if stop_timer is not None:
                 stop_timer.cancel()
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             self._motors.stop()
             self._motors.close()
-            _stop_capture.set()
             if cam:
                 self._close_camera(cam)
             print("\n[teleop] stopped.")
@@ -295,7 +289,7 @@ class TeleopController(StreamMixin):
         current_action = ["stop"]
         running = [True]
 
-        def on_press(key) -> None:
+        def on_press(key: Any) -> None:
             action = keymap.get(key)
             if action:
                 current_action[0] = action
@@ -307,7 +301,7 @@ class TeleopController(StreamMixin):
                 if key == kb.Key.esc:
                     running[0] = False
 
-        def on_release(key) -> None:
+        def on_release(key: Any) -> None:
             if key in keymap:
                 current_action[0] = "stop"
 

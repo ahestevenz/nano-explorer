@@ -17,15 +17,18 @@ Dependencies (install from source — see doc/jetbot-setup.md):
 """
 
 import json
+import threading
 from pathlib import Path
+from typing import Any, Tuple
 
 import cv2
 import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.camera import Camera
 from lib.settings import PROJECT_ROOT_PATH
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 # Skeleton connections for visualisation (COCO keypoint names)
 _SKELETON_EDGES = [
@@ -53,27 +56,32 @@ class PoseConfig(BaseModel):
         config_path: Path to pose YAML config.
         stream:      Serve annotated MJPEG stream.
         stream_port: MJPEG server port.
+        speed:       Motor speed [0.0, 1.0].
+        turn_gain:   Differential turn gain [0.0, 1.0].
     """
 
     config_path: Path = PROJECT_ROOT_PATH / "config/models/pose.yaml"
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
     @validator("config_path")
-    def config_must_exist(cls, v):  # pylint: disable=no-self-argument
+    def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(f"Pose config not found: {v}")
         return v
 
 
-class PoseEstimator:
+class PoseEstimator(CameraMotionMixIn):
     """
     Human pose estimator using trt_pose.
 
     Construct via PoseEstimator(**config.dict()).
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__()
         self._config = PoseConfig(**kwargs)
         self._model = None
         self._topology = None
@@ -82,7 +90,6 @@ class PoseEstimator:
         self._device = None
         self._width = 224
         self._height = 224
-        self._server = None
 
     def _load(self) -> None:
         import torch
@@ -155,7 +162,7 @@ class PoseEstimator:
             torch.save(self._model.state_dict(), str(engine_path))
             logger.success(f"TRT engine saved: {engine_path}")
 
-    def infer(self, frame: np.ndarray):
+    def infer(self, frame: np.ndarray) -> Tuple[Any, Any, Any]:
         """Run inference on a BGR frame. Returns (counts, objects, peaks)."""
         import torch
 
@@ -168,7 +175,7 @@ class PoseEstimator:
         counts, objects, peaks = self._parse_obj(cmap, paf)
         return counts, objects, peaks
 
-    def annotate_frame(self, frame: np.ndarray, counts, objects, peaks) -> np.ndarray:
+    def annotate_frame(self, frame: np.ndarray, counts: Any, objects: Any, peaks: Any) -> np.ndarray:
         """Overlay skeleton keypoints on a copy of frame."""
         out = frame.copy()
         h, w = out.shape[:2]
@@ -187,26 +194,28 @@ class PoseEstimator:
     def run(self) -> None:
         self._load()
 
+        _stop = threading.Event()
+
         if self._config.stream:
-            self._server = MjpegServer(port=self._config.stream_port)
-            self._server.start()
+            self._start_server_stream(stream_port=self._config.stream_port)
+
+        self._start_teleop_thread(_stop, self._config.speed, self._config.turn_gain)
 
         with Camera() as cam:
             logger.info("Pose estimation running — Ctrl+C to stop")
             try:
-                while True:
+                while not _stop.is_set():
                     frame = cam.read()
                     counts, objects, peaks = self.infer(frame)
-                    logger.debug(f"Detected {int(counts[0])} person(s)")
+                    logger.debug("Detected {} person(s)".format(int(counts[0])))
 
                     if self._server is not None:
-                        self._server.frame_buffer.put(
-                            self.annotate_frame(frame, counts, objects, peaks)
-                        )
+                        self._push_frame(self.annotate_frame(frame, counts, objects, peaks))
 
             except KeyboardInterrupt:
                 pass
             finally:
+                _stop.set()
                 if self._server is not None:
                     self._server.stop()
                 logger.info("Pose estimator stopped.")

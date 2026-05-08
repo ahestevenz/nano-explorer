@@ -24,6 +24,7 @@ YAML fields (config/models/face.yaml):
 
 from enum import Enum
 from pathlib import Path
+from typing import Any, List
 
 import cv2
 import numpy as np
@@ -32,7 +33,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
 from lib.settings import PROJECT_ROOT_PATH
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 _DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
 
@@ -50,27 +51,31 @@ class FaceDetectionConfig(BaseModel):
         config_path: Path to face detection YAML config.
         stream:      Serve annotated MJPEG stream while running.
         stream_port: MJPEG server port.
+        speed:       Motor speed [0.0, 1.0].
+        turn_gain:   Differential turn gain [0.0, 1.0].
     """
 
     config_path: Path = PROJECT_ROOT_PATH / "config/models/face.yaml"
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
     @validator("config_path")
-    def config_must_exist(cls, v):  # pylint: disable=no-self-argument
+    def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(f"Face config not found: {v}")
         return v
 
 
-class FaceDetector(StreamMixin):
+class FaceDetector(CameraMotionMixIn):
     """
     Face / people detector backed by Haar cascades or OpenCV DNN.
 
     Construct via FaceDetector(**config.dict()).
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__()
         self._config = FaceDetectionConfig(**kwargs)
         self._backend = None
@@ -118,7 +123,7 @@ class FaceDetector(StreamMixin):
                 f"Unknown backend '{self._backend}'. Choose: {[b.value for b in FaceDetectorBackend]} ."
             )
 
-    def _detect_haar(self, frame) -> list:
+    def _detect_haar(self, frame: np.ndarray) -> List[dict]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self._face_cascade.detectMultiScale(gray, self._scale, self._neigh)
         results = [{"label": "face", "bbox": (x, y, x + w, y + h)} for x, y, w, h in faces]
@@ -127,7 +132,7 @@ class FaceDetector(StreamMixin):
             results += [{"label": "person", "bbox": (x, y, x + w, y + h)} for x, y, w, h in bodies]
         return results
 
-    def _detect_dnn(self, frame) -> list:
+    def _detect_dnn(self, frame: np.ndarray) -> List[dict]:
         h, w = frame.shape[:2]
         blob = cv2.dnn.blobFromImage(
             cv2.resize(frame, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0)
@@ -143,7 +148,7 @@ class FaceDetector(StreamMixin):
         return results
 
     @staticmethod
-    def annotate_frame(frame: np.ndarray, detections: list) -> np.ndarray:
+    def annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
         out = frame.copy()
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
@@ -163,16 +168,22 @@ class FaceDetector(StreamMixin):
         return out
 
     def run(self) -> None:
+        import threading
+
         self._load()
         detect_fn = self._detect_haar if self._backend == "haar" else self._detect_dnn
+
+        _stop = threading.Event()
 
         if self._config.stream:
             self._start_server_stream(stream_port=self._config.stream_port)
 
+        self._start_teleop_thread(_stop, self._config.speed, self._config.turn_gain)
+
         with Camera() as cam:
             logger.info("Face detection running — Ctrl+C to stop")
             try:
-                while True:
+                while not _stop.is_set():
                     frame = cam.read()
                     results = detect_fn(frame)
                     for r in results:
@@ -182,7 +193,7 @@ class FaceDetector(StreamMixin):
             except KeyboardInterrupt:
                 pass
             finally:
+                _stop.set()
                 if self._server is not None:
                     self._server.stop()
-                self._close_camera(cam)
                 logger.info("Face detector stopped.")

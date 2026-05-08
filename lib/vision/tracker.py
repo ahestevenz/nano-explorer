@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
 from lib.motor import MotorController
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 
 # HSV ranges for common colours (OpenCV hue: 0–179)
 _COLOR_RANGES = {
@@ -75,7 +75,7 @@ class TrackerConfig(BaseModel):
         return v
 
 
-class ObjectTracker(StreamMixin):
+class ObjectTracker(CameraMotionMixIn):
     """
     Track a visual target and steer the robot toward it.
 

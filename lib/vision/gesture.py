@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, validator
 from lib.camera import Camera
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
-from lib.stream_mixin import StreamMixin
+from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.vision.pose import PoseConfig, PoseEstimator
 
 _KP = {
@@ -63,7 +63,7 @@ class GestureConfig(BaseModel):
         return v
 
 
-class GestureController(StreamMixin):
+class GestureController(CameraMotionMixIn):
     """
     Interpret body gestures and drive the JetBot accordingly.
 

@@ -49,29 +49,83 @@ nano-explorer <group> <command> [options]
 
 ### Motion Operations
 
-```bash
-# Teleoperation via keyboard (arrow keys)
-nano-explorer motion teleop --speed SPEED
-nano-explorer motion teleop --turn-gain GAIN
-nano-explorer motion teleop --mode {auto,arrows,pynput,stdin}
-nano-explorer motion teleop --stream
-nano-explorer motion teleop --stream-port PORT
+Stream is **on by default** for all motion commands. Pass `--no-stream` to disable.
 
-# Camera streaming
+```bash
+# Teleoperation via keyboard (arrow keys) — stream on by default
+nano-explorer motion teleop
+nano-explorer motion teleop --speed SPEED              # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer motion teleop --turn-gain GAIN           # differential turn gain 0.0-1.0 (default: 0.5)
+nano-explorer motion teleop --mode {auto,arrows,pynput,stdin}
+nano-explorer motion teleop --stream-port PORT
+nano-explorer motion teleop --no-stream                # disable MJPEG stream
+
+# Camera streaming only
+nano-explorer motion stream
 nano-explorer motion stream --mode {mjpeg,opencv}
 nano-explorer motion stream --port PORT
-nano-explorer motion stream --width W
-nano-explorer motion stream --height H
+nano-explorer motion stream --width W --height H --fps FPS
 
-# Collision avoider
-nano-explorer motion collision --model PATH
-nano-explorer motion collision --threshold T  # Blocked probability threshold
+# Collision avoidance — stream on by default
+nano-explorer motion collision
+nano-explorer motion collision --model PATH            # path to .pth or .engine
+nano-explorer motion collision --threshold T           # blocked probability threshold (default: 0.5)
 nano-explorer motion collision --speed SPEED
-nano-explorer motion collision --stream
 nano-explorer motion collision --stream-port PORT
+nano-explorer motion collision --no-stream
 ```
 
 ### Computer Vision & Detection
+
+All vision commands stream the annotated feed (**on by default**) and allow driving the robot
+with arrow keys simultaneously. Pass `--no-stream` to disable the stream.
+
+```bash
+# Object detection (jetson-inference or OpenCV DNN)
+nano-explorer vision detect
+nano-explorer vision detect --config YAML              # model config (default: config/models/detection.yaml)
+nano-explorer vision detect --threshold T              # confidence threshold (default: 0.5)
+nano-explorer vision detect --speed SPEED --turn-gain GAIN
+nano-explorer vision detect --stream-port PORT
+nano-explorer vision detect --no-stream
+
+# Face and people detection
+nano-explorer vision faces
+nano-explorer vision faces --config YAML               # model config (default: config/models/face.yaml)
+nano-explorer vision faces --speed SPEED --turn-gain GAIN
+nano-explorer vision faces --stream-port PORT
+nano-explorer vision faces --no-stream
+
+# Object / colour / blob tracking
+nano-explorer vision track
+nano-explorer vision track --mode {color,blob,object}  # tracking mode (default: color)
+nano-explorer vision track --color {red,green,blue,yellow,orange}
+nano-explorer vision track --label CLASS               # COCO class for mode=object (default: person)
+nano-explorer vision track --speed SPEED
+nano-explorer vision track --stream-port PORT
+nano-explorer vision track --no-stream
+
+# Semantic segmentation (jetson-inference segNet)
+nano-explorer vision segment
+nano-explorer vision segment --config YAML             # model config (default: config/models/segmentation.yaml)
+nano-explorer vision segment --speed SPEED --turn-gain GAIN
+nano-explorer vision segment --stream-port PORT
+nano-explorer vision segment --no-stream
+
+# Human pose estimation (trt_pose)
+nano-explorer vision pose
+nano-explorer vision pose --config YAML                # model config (default: config/models/pose.yaml)
+nano-explorer vision pose --speed SPEED --turn-gain GAIN
+nano-explorer vision pose --stream-port PORT
+nano-explorer vision pose --no-stream
+
+# Gesture-based robot control (trt_pose)
+nano-explorer vision gesture
+nano-explorer vision gesture --config YAML
+nano-explorer vision gesture --speed SPEED
+nano-explorer vision gesture --stream-port PORT
+nano-explorer vision gesture --no-stream
+```
 
 ### Navigation & Mapping (Experimental)
 

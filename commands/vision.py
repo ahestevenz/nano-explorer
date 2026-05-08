@@ -28,10 +28,13 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         "--threshold", type=float, default=0.5, metavar="T",
         help="Confidence threshold override (default: 0.5)",
     )
-    p_det.add_argument("--stream", action="store_true",
-                       help="Serve annotated MJPEG stream")
+    p_det.add_argument("--no-stream", action="store_false", dest="stream", default=True,
+                       help="Disable annotated MJPEG stream")
     p_det.add_argument("--stream-port", type=int, default=settings.stream_port,
                        dest="stream_port", metavar="PORT")
+    p_det.add_argument("--speed", type=float, default=settings.default_speed, metavar="SPEED")
+    p_det.add_argument("--turn-gain", type=float, default=settings.default_turn_gain,
+                       dest="turn_gain", metavar="GAIN")
     p_det.set_defaults(func=_run_detect)
 
     # faces
@@ -42,10 +45,13 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         dest="config_path",
         metavar="YAML",
     )
-    p_face.add_argument("--stream", action="store_true",
-                        help="Serve annotated MJPEG stream")
+    p_face.add_argument("--no-stream", action="store_false", dest="stream", default=True,
+                        help="Disable annotated MJPEG stream")
     p_face.add_argument("--stream-port", type=int, default=settings.stream_port,
                         dest="stream_port", metavar="PORT")
+    p_face.add_argument("--speed", type=float, default=settings.default_speed, metavar="SPEED")
+    p_face.add_argument("--turn-gain", type=float, default=settings.default_turn_gain,
+                        dest="turn_gain", metavar="GAIN")
     p_face.set_defaults(func=_run_faces)
 
     # track
@@ -68,7 +74,7 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     p_track.add_argument(
         "--speed", type=float, default=settings.default_speed, metavar="SPEED",
     )
-    p_track.add_argument("--stream", action="store_true")
+    p_track.add_argument("--no-stream", action="store_false", dest="stream", default=True)
     p_track.add_argument("--stream-port", type=int, default=settings.stream_port,
                          dest="stream_port", metavar="PORT")
     p_track.set_defaults(func=_run_track)
@@ -81,9 +87,12 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         dest="config_path",
         metavar="YAML",
     )
-    p_seg.add_argument("--stream", action="store_true")
+    p_seg.add_argument("--no-stream", action="store_false", dest="stream", default=True)
     p_seg.add_argument("--stream-port", type=int, default=settings.stream_port,
                        dest="stream_port", metavar="PORT")
+    p_seg.add_argument("--speed", type=float, default=settings.default_speed, metavar="SPEED")
+    p_seg.add_argument("--turn-gain", type=float, default=settings.default_turn_gain,
+                       dest="turn_gain", metavar="GAIN")
     p_seg.set_defaults(func=_run_segment)
 
     # pose
@@ -94,9 +103,12 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         dest="config_path",
         metavar="YAML",
     )
-    p_pose.add_argument("--stream", action="store_true")
+    p_pose.add_argument("--no-stream", action="store_false", dest="stream", default=True)
     p_pose.add_argument("--stream-port", type=int, default=settings.stream_port,
                         dest="stream_port", metavar="PORT")
+    p_pose.add_argument("--speed", type=float, default=settings.default_speed, metavar="SPEED")
+    p_pose.add_argument("--turn-gain", type=float, default=settings.default_turn_gain,
+                        dest="turn_gain", metavar="GAIN")
     p_pose.set_defaults(func=_run_pose)
 
     # gesture 
@@ -112,7 +124,7 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     p_gest.add_argument(
         "--speed", type=float, default=settings.default_speed, metavar="SPEED",
     )
-    p_gest.add_argument("--stream", action="store_true")
+    p_gest.add_argument("--no-stream", action="store_false", dest="stream", default=True)
     p_gest.add_argument("--stream-port", type=int, default=settings.stream_port,
                         dest="stream_port", metavar="PORT")
     p_gest.set_defaults(func=_run_gesture)

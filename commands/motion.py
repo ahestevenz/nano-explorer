@@ -49,10 +49,11 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         ),
     )
     p_teleop.add_argument(
-        "--stream",
-        action="store_true",
-        help="Start a background MJPEG camera stream while driving "
-        "(open http://<nano-ip>:8080/stream in your browser)",
+        "--no-stream",
+        action="store_false",
+        dest="stream",
+        default=True,
+        help="Disable the background MJPEG camera stream",
     )
     p_teleop.add_argument(
         "--stream-port",
@@ -110,10 +111,11 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         help="Forward motor speed (default: 0.3)",
     )
     p_col.add_argument(
-        "--stream",
-        action="store_true",
-        help="Start a background MJPEG camera stream while running "
-        "(open http://<nano-ip>:8080/ in your browser)",
+        "--no-stream",
+        action="store_false",
+        dest="stream",
+        default=True,
+        help="Disable the background MJPEG camera stream",
     )
     p_col.add_argument(
         "--stream-port",
