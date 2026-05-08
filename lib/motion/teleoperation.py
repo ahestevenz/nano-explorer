@@ -40,8 +40,8 @@ from typing import Any, Optional
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.motor import MotorController
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.motor import MotorController
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -125,6 +125,7 @@ _STDIN_MAP = {
     "q": "quit",
     "quit": "quit",
 }
+
 
 class TeleopConfig(BaseModel):
     """
@@ -222,9 +223,7 @@ class TeleopController(CameraMotionMixIn):
 
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream(
-                cam=cam, stop_event=_stop, stream_port=self._config.stream_port
-            )
+            self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
 
         stop_timer = None
 
@@ -236,8 +235,19 @@ class TeleopController(CameraMotionMixIn):
             stop_timer.daemon = True
             stop_timer.start()
 
+        # Cosmetic: fix log line alignment in raw terminal mode
+        # tty.setraw() strips carriage returns from stderr, causing loguru output
+        # to start mid-line when the robot is idle. We temporarily replace the
+        # default sink with one that prepends \r to reset the cursor to column 0.
+        def _raw_sink(message: str) -> None:
+            sys.stderr.write("\r" + str(message))
+            sys.stderr.flush()
+
+        logger.remove()
+        raw_id = logger.add(_raw_sink, colorize=True)
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+
         try:
             tty.setraw(fd)
             while not _stop.is_set():
@@ -258,6 +268,8 @@ class TeleopController(CameraMotionMixIn):
         finally:
             if stop_timer is not None:
                 stop_timer.cancel()
+            logger.remove(raw_id)
+            logger.add(sys.stderr, colorize=True)  # restore default sink
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             self._motors.stop()
             self._motors.close()
@@ -378,5 +390,5 @@ class TeleopController(CameraMotionMixIn):
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
-        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}  ")
+        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}\r\n")
         sys.stdout.flush()

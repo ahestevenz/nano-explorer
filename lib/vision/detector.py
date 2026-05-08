@@ -32,8 +32,8 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.settings import PROJECT_ROOT_PATH
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.settings import PROJECT_ROOT_PATH
 
 _SCORE_THRESHOLD: float = 0.5
 
@@ -222,9 +222,7 @@ class ObjectDetector(CameraMotionMixIn):
         _stop = threading.Event()
 
         if self._config.stream:
-            self._start_stream(
-                cam=cam, stop_event=_stop, stream_port=self._config.stream_port
-            )
+            self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
 
         self._start_teleop_thread(_stop, self._config.speed, self._config.turn_gain)
 
@@ -237,7 +235,7 @@ class ObjectDetector(CameraMotionMixIn):
 
                 for d in detections:
                     logger.info(
-                        "  {:<22} conf={:.2f}  bbox={}".format(d["label"], d["conf"], d["bbox"])
+                        "{:<22} conf={:.2f}  bbox={}".format(d["label"], d["conf"], d["bbox"])
                     )
 
                 if self._config.stream and self._server is not None:
