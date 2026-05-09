@@ -121,7 +121,7 @@ class ObjectTracker(CameraMotionMixIn):
         params.filterByCircularity = False
         params.filterByConvexity = False
         detector = cv2.SimpleBlobDetector_create(params)
-        kps = detector.detect(cv2.bitwise_not(gray))
+        kps = list(detector.detect(cv2.bitwise_not(gray)))
         if not kps:
             return None
         largest = max(kps, key=lambda k: k.size)
