@@ -19,7 +19,7 @@ Usage:
                     result = self._process(frame)
                     if self._config.stream and self._server is not None:
                         self._server.frame_buffer.put(
-                            self._annotated_frame(frame, result)
+                            self._annotate_frame(frame, result)
                         )
             except KeyboardInterrupt:
                 pass

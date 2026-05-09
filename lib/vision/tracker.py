@@ -136,16 +136,6 @@ class ObjectTracker(CameraMotionMixIn):
         error = (cx - fw / 2) / (fw / 2)
         self._motors.steer(self._config.speed, _Kp * error)
 
-    @staticmethod
-    def annotate_frame(frame: np.ndarray, centroid) -> np.ndarray:
-        out = frame.copy()
-        h, w = out.shape[:2]
-        cv2.line(out, (w // 2, 0), (w // 2, h), (200, 200, 200), 1)
-        if centroid:
-            cv2.circle(out, centroid, 12, (0, 0, 255), -1)
-            cv2.line(out, (w // 2, centroid[1]), centroid, (0, 200, 255), 2)
-        return out
-
     def run(self) -> None:
         self._motors.open()
 
@@ -172,7 +162,7 @@ class ObjectTracker(CameraMotionMixIn):
                     self._steer_to(frame, centroid)
 
                     if self._server is not None:
-                        self._push_frame(self.annotate_frame(frame, centroid))
+                        self._push_frame(self._annotate_frame(frame, centroid))
 
             except KeyboardInterrupt:
                 pass
@@ -182,3 +172,13 @@ class ObjectTracker(CameraMotionMixIn):
                 if self._server is not None:
                     self._server.stop()
                 logger.info("Tracker stopped.")
+                
+    @staticmethod
+    def _annotate_frame(frame: np.ndarray, centroid) -> np.ndarray:
+        out = frame.copy()
+        h, w = out.shape[:2]
+        cv2.line(out, (w // 2, 0), (w // 2, h), (200, 200, 200), 1)
+        if centroid:
+            cv2.circle(out, centroid, 12, (0, 0, 255), -1)
+            cv2.line(out, (w // 2, centroid[1]), centroid, (0, 200, 255), 2)
+        return out

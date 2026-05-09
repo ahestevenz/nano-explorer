@@ -75,9 +75,9 @@ class TestTeleopDefaults:
         ns = _parse(["teleop"])
         assert ns.mode == "arrows"
 
-    def test_default_stream_is_false(self):
+    def test_default_stream_is_true(self):
         ns = _parse(["teleop"])
-        assert ns.stream is False
+        assert ns.stream is True
 
     def test_default_stream_port_from_settings(self):
         settings = NanoSettings()
@@ -100,9 +100,9 @@ class TestTeleopArgs:
         ns = _parse(["teleop", "--turn-gain", "0.8"])
         assert ns.turn_gain == pytest.approx(0.8)
 
-    def test_stream_flag(self):
-        ns = _parse(["teleop", "--stream"])
-        assert ns.stream is True
+    def test_no_stream_flag(self):
+        ns = _parse(["teleop", "--no-stream"])
+        assert ns.stream is False
 
     def test_custom_stream_port(self):
         ns = _parse(["teleop", "--stream-port", "9090"])
@@ -193,9 +193,9 @@ class TestCollisionDefaults:
         ns = _parse(["collision", "--model", "assets/models/fake.pth"], settings)
         assert ns.speed == settings.default_speed
 
-    def test_default_stream_is_false(self):
+    def test_default_stream_is_true(self):
         ns = _parse(["collision", "--model", "assets/models/fake.pth"])
-        assert ns.stream is False
+        assert ns.stream is True
 
     def test_func_is_set(self):
         from commands.motion import _run_collision
@@ -213,9 +213,9 @@ class TestCollisionArgs:
         ns = _parse(["collision", "--model", "m.pth", "--speed", "0.6"])
         assert ns.speed == pytest.approx(0.6)
 
-    def test_stream_flag(self):
-        ns = _parse(["collision", "--model", "m.pth", "--stream"])
-        assert ns.stream is True
+    def test_no_stream_flag(self):
+        ns = _parse(["collision", "--model", "m.pth", "--no-stream"])
+        assert ns.stream is False
 
     def test_custom_stream_port(self):
         ns = _parse(["collision", "--model", "m.pth", "--stream-port", "9999"])

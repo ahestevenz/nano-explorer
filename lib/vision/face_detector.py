@@ -147,26 +147,6 @@ class FaceDetector(CameraMotionMixIn):
                 results.append({"label": "face", "conf": conf, "bbox": tuple(box.tolist())})
         return results
 
-    @staticmethod
-    def annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
-        out = frame.copy()
-        for d in detections:
-            x1, y1, x2, y2 = d["bbox"]
-            conf = d.get("conf")
-            text = f"{d['label']}  {conf:.2f}" if conf else d["label"]
-            cv2.rectangle(out, (x1, y1), (x2, y2), (255, 80, 0), 2)
-            cv2.putText(
-                out,
-                text,
-                (x1, max(y1 - 6, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (255, 80, 0),
-                1,
-                cv2.LINE_AA,
-            )
-        return out
-
     def run(self) -> None:
         import threading
 
@@ -189,7 +169,7 @@ class FaceDetector(CameraMotionMixIn):
                     for r in results:
                         logger.info(r)
                     if self._server is not None:
-                        self._push_frame(self.annotate_frame(frame, results))
+                        self._push_frame(self._annotate_frame(frame, results))
             except KeyboardInterrupt:
                 pass
             finally:
@@ -197,3 +177,23 @@ class FaceDetector(CameraMotionMixIn):
                 if self._server is not None:
                     self._server.stop()
                 logger.info("Face detector stopped.")
+                
+    @staticmethod
+    def _annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
+        out = frame.copy()
+        for d in detections:
+            x1, y1, x2, y2 = d["bbox"]
+            conf = d.get("conf")
+            text = f"{d['label']}  {conf:.2f}" if conf else d["label"]
+            cv2.rectangle(out, (x1, y1), (x2, y2), (255, 80, 0), 2)
+            cv2.putText(
+                out,
+                text,
+                (x1, max(y1 - 6, 0)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 80, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        return out

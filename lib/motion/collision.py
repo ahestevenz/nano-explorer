@@ -89,7 +89,7 @@ class CollisionAvoider(CameraMotionMixIn):
                     out = self._model(inp)
                     prob = torch.softmax(out, dim=1)[0][1].item()
 
-                annotated = self._annotated_frame(frame=frame, model_score=prob)
+                annotated = self._annotate_frame(frame=frame, model_score=prob)
 
                 # push annotated frame to MJPEG stream if active
                 if self._config.stream and self._server is not None:
@@ -164,7 +164,7 @@ class CollisionAvoider(CameraMotionMixIn):
             self._model = model.to(self._device).eval()
             logger.success(f"Loaded PyTorch model: {model_path}")
 
-    def _annotated_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
+    def _annotate_frame(self, frame: np.ndarray, model_score: float) -> np.ndarray:
         annotated = frame.copy()
         bar_origin = (10, 10)
         bar_end_x = 310

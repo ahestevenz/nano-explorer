@@ -80,9 +80,9 @@ class TestDetectDefaults:
         ns = _parse(["detect"])
         assert ns.threshold == 0.5
 
-    def test_default_stream_is_false(self):
+    def test_default_stream_is_true(self):
         ns = _parse(["detect"])
-        assert ns.stream is False
+        assert ns.stream is True
 
     def test_stream_port_from_settings(self):
         settings = NanoSettings()
@@ -144,13 +144,13 @@ class TestObjectTracker:
     def test_annotate_runs_without_centroid(self):
         from lib.vision.tracker import ObjectTracker
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        out = ObjectTracker.annotate(frame.copy(), None)
+        out = ObjectTracker._annotate_frame(frame.copy(), None)
         assert out.shape == frame.shape
 
     def test_annotate_runs_with_centroid(self):
         from lib.vision.tracker import ObjectTracker
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        out = ObjectTracker.annotate(frame.copy(), (320, 240))
+        out = ObjectTracker._annotate_frame(frame.copy(), (320, 240))
         assert out.shape == frame.shape
 
     def test_left_stripe_gives_negative_error(self):
@@ -177,6 +177,55 @@ class TestObjectTracker:
             error = (cx - 320) / 320
             assert error > 0
 
+    def test_small_contour_returns_none(self):
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+        tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame[240:243, 320:323, 2] = 200  # 3×3 = 9 px, well below _MIN_AREA
+        centroid, _ = tracker._find_color_centroid(frame)
+        assert centroid is None
+
+    def test_find_blob_centroid_no_blob_returns_none(self):
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+        tracker = ObjectTracker(**TrackerConfig(mode="blob", color="red").dict())
+        assert tracker._find_blob_centroid(np.zeros((480, 640, 3), dtype=np.uint8)) is None
+
+    def test_find_blob_centroid_locates_blob(self):
+        import cv2
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+        tracker = ObjectTracker(**TrackerConfig(mode="blob", color="red").dict())
+        frame = np.full((480, 640, 3), 50, dtype=np.uint8)
+        cv2.circle(frame, (320, 240), 25, (255, 255, 255), -1)
+        centroid = tracker._find_blob_centroid(frame)
+        assert centroid is not None
+        assert 300 < centroid[0] < 340
+        assert 220 < centroid[1] < 260
+
+    def test_steer_to_no_centroid_turns_right(self):
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+        tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
+        tracker._motors = MagicMock()
+        tracker._steer_to(np.zeros((480, 640, 3), dtype=np.uint8), None)
+        tracker._motors.turn_right.assert_called_once_with(0.15)
+
+    def test_steer_to_centroid_right_of_center(self):
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+        tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
+        tracker._motors = MagicMock()
+        tracker._steer_to(np.zeros((480, 640, 3), dtype=np.uint8), (480, 240))
+        _, steering = tracker._motors.steer.call_args[0]
+        assert steering > 0
+
+    def test_config_invalid_mode_raises(self):
+        from lib.vision.tracker import TrackerConfig
+        with pytest.raises(ValueError):
+            TrackerConfig(mode="laser", color="red")
+
+    def test_config_invalid_color_raises(self):
+        from lib.vision.tracker import TrackerConfig
+        with pytest.raises(ValueError):
+            TrackerConfig(mode="color", color="purple")
+
 
 # lib/vision/detector.py
 class TestObjectDetector:
@@ -187,14 +236,14 @@ class TestObjectDetector:
     def test_annotate_empty(self):
         from lib.vision.detector import ObjectDetector
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        out = ObjectDetector.annotate(frame.copy(), [])
-        assert np.array_equal(out, frame)
+        out = ObjectDetector._annotate_frame(frame.copy(), [])
+        assert out.shape == frame.shape
 
     def test_annotate_draws_box(self):
         from lib.vision.detector import ObjectDetector
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = [{"label": "person", "conf": 0.9, "bbox": (10, 10, 200, 300)}]
-        out = ObjectDetector.annotate(frame.copy(), dets)
+        out = ObjectDetector._annotate_frame(frame.copy(), dets)
         assert not np.array_equal(out, frame)
 
     def test_missing_config_raises(self, tmp_path):
@@ -220,14 +269,21 @@ class TestFaceDetector:
     def test_annotate_no_detections(self):
         from lib.vision.face_detector import FaceDetector
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        out = FaceDetector.annotate(frame.copy(), [])
+        out = FaceDetector._annotate_frame(frame.copy(), [])
         assert np.array_equal(out, frame)
 
     def test_annotate_face(self):
         from lib.vision.face_detector import FaceDetector
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = [{"label": "face", "bbox": (50, 50, 200, 200)}]
-        out = FaceDetector.annotate(frame.copy(), dets)
+        out = FaceDetector._annotate_frame(frame.copy(), dets)
+        assert not np.array_equal(out, frame)
+
+    def test_annotate_face_with_conf(self):
+        from lib.vision.face_detector import FaceDetector
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        dets = [{"label": "face", "conf": 0.92, "bbox": (50, 50, 200, 200)}]
+        out = FaceDetector._annotate_frame(frame.copy(), dets)
         assert not np.array_equal(out, frame)
 
     def test_missing_config_raises(self, tmp_path):

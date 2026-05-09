@@ -179,37 +179,6 @@ class ObjectDetector(CameraMotionMixIn):
                     )
         return results
 
-    @staticmethod
-    def _annotated_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
-        """Draw bounding boxes and labels onto a copy of frame."""
-        out = frame.copy()
-        for d in detections:
-            x1, y1, x2, y2 = d["bbox"]
-            label = "{:<20} {:.2f}".format(d["label"], d["conf"])
-            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                out,
-                label,
-                (x1, max(y1 - 6, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
-        # Detection count overlay
-        cv2.putText(
-            out,
-            "{} object(s)".format(len(detections)),
-            (10, out.shape[0] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (200, 200, 200),
-            1,
-            cv2.LINE_AA,
-        )
-        return out
-
     def run(self) -> None:
         import signal
 
@@ -239,7 +208,7 @@ class ObjectDetector(CameraMotionMixIn):
                     )
 
                 if self._config.stream and self._server is not None:
-                    self._push_frame(self._annotated_frame(frame, detections))
+                    self._push_frame(self._annotate_frame(frame, detections))
 
         except KeyboardInterrupt:
             pass
@@ -249,3 +218,33 @@ class ObjectDetector(CameraMotionMixIn):
             if self._server is not None:
                 self._server.stop()
             logger.info("Detector stopped.")
+            
+    @staticmethod
+    def _annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
+        """Draw bounding boxes, labels, and detection count onto a copy of frame."""
+        out = frame.copy()
+        for d in detections:
+            x1, y1, x2, y2 = d["bbox"]
+            label = "{:<20} {:.2f}".format(d["label"], d["conf"])
+            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                out,
+                label,
+                (x1, max(y1 - 6, 0)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        cv2.putText(
+            out,
+            "{} object(s)".format(len(detections)),
+            (10, out.shape[0] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+        return out
