@@ -24,8 +24,8 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
-from lib.motor import MotorController
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.motor import MotorController
 
 # HSV ranges for common colours (OpenCV hue: 0–179)
 _COLOR_RANGES = {
@@ -38,7 +38,7 @@ _COLOR_RANGES = {
 
 _VALID_COLORS = list(_COLOR_RANGES.keys())
 _VALID_MODES = ["color", "blob", "object"]
-_Kp = 0.4  # proportional steering gain
+_KP = 0.4  # proportional steering gain
 _MIN_AREA = 500
 
 
@@ -108,9 +108,9 @@ class ObjectTracker(CameraMotionMixIn):
         if cv2.contourArea(largest) < _MIN_AREA:
             return None, mask
 
-        M = cv2.moments(largest)
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
+        m = cv2.moments(largest)
+        cx = int(m["m10"] / m["m00"])
+        cy = int(m["m01"] / m["m00"])
         return (cx, cy), mask
 
     def _find_blob_centroid(self, frame):
@@ -134,7 +134,7 @@ class ObjectTracker(CameraMotionMixIn):
             return
         cx = centroid[0]
         error = (cx - fw / 2) / (fw / 2)
-        self._motors.steer(self._config.speed, _Kp * error)
+        self._motors.steer(self._config.speed, _KP * error)
 
     def run(self) -> None:
         self._motors.open()
@@ -172,7 +172,7 @@ class ObjectTracker(CameraMotionMixIn):
                 if self._server is not None:
                     self._server.stop()
                 logger.info("Tracker stopped.")
-                
+
     @staticmethod
     def _annotate_frame(frame: np.ndarray, centroid) -> np.ndarray:
         out = frame.copy()

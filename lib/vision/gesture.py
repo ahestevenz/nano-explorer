@@ -23,9 +23,9 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
+from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
-from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.vision.pose import PoseConfig, PoseEstimator
 
 _KP = {

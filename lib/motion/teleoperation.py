@@ -264,7 +264,7 @@ class TeleopController(CameraMotionMixIn):
                 self._apply_action(action)
                 _schedule_stop()
         except Exception as exc:
-            logger.error("Arrow teleop error: {}".format(exc))
+            logger.error(f"Arrow teleop error: {exc}")
         finally:
             if stop_timer is not None:
                 stop_timer.cancel()

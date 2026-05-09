@@ -32,8 +32,8 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
-from lib.settings import PROJECT_ROOT_PATH
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.settings import PROJECT_ROOT_PATH
 
 _DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
 
@@ -83,11 +83,12 @@ class FaceDetector(CameraMotionMixIn):
         self._body_cascade = None
         self._net = None
         self._threshold = 0.5
+        self._load()
 
     def _load(self) -> None:
         import yaml
 
-        with open(self._config.config_path) as f:
+        with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         self._backend = FaceDetectorBackend(cfg.get("backend"))
@@ -150,7 +151,6 @@ class FaceDetector(CameraMotionMixIn):
     def run(self) -> None:
         import threading
 
-        self._load()
         detect_fn = self._detect_haar if self._backend == "haar" else self._detect_dnn
 
         _stop = threading.Event()
@@ -177,7 +177,7 @@ class FaceDetector(CameraMotionMixIn):
                 if self._server is not None:
                     self._server.stop()
                 logger.info("Face detector stopped.")
-                
+
     @staticmethod
     def _annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
         out = frame.copy()

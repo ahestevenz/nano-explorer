@@ -1,3 +1,4 @@
+import contextlib
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -6,10 +7,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import cv2 before the mock loop so the real library is used when available.
 # sys.modules.setdefault below is a no-op for any module already imported here.
-try:
+with contextlib.suppress(ImportError):
     import cv2  # noqa: F401
-except ImportError:
-    pass
 
 # Mock hardware-only modules so they never need to be installed on CI
 for mod in [

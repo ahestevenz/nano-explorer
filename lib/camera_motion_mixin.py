@@ -76,7 +76,7 @@ class CameraMotionMixIn:
         """Start the MJPEG server pointed at the shared frame buffer."""
         self._server = MjpegServer(port=stream_port)
         self._server.start()
-        logger.info("Camera stream -> http://{}:{}/stream".format(self._nano_ip, stream_port))
+        logger.info(f"Camera stream -> http://{self._nano_ip}:{stream_port}/stream")
 
     def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
         """
@@ -118,7 +118,9 @@ class CameraMotionMixIn:
         """
         self._server.frame_buffer.put(frame)
 
-    def _start_teleop_thread(self, stop_event: threading.Event, speed: float = 0.3, turn_gain: float = 0.5) -> threading.Thread:
+    def _start_teleop_thread(
+        self, stop_event: threading.Event, speed: float = 0.3, turn_gain: float = 0.5
+    ) -> threading.Thread:
         """
         Start arrow-key teleoperation in a background daemon thread.
 
@@ -134,6 +136,7 @@ class CameraMotionMixIn:
             The started daemon thread.
         """
         from lib.motion.teleoperation import TeleopController
+
         controller = TeleopController(speed=speed, turn_gain=turn_gain)
         t = threading.Thread(
             target=controller._run_arrows,

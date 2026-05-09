@@ -27,8 +27,8 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
-from lib.settings import PROJECT_ROOT_PATH
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.settings import PROJECT_ROOT_PATH
 
 # Skeleton connections for visualisation (COCO keypoint names)
 _SKELETON_EDGES = [
@@ -90,6 +90,7 @@ class PoseEstimator(CameraMotionMixIn):
         self._device = None
         self._width = 224
         self._height = 224
+        self._load()
 
     def _load(self) -> None:
         import torch
@@ -106,7 +107,7 @@ class PoseEstimator(CameraMotionMixIn):
                 "Build from source: https://github.com/NVIDIA-AI-IOT/trt_pose"
             ) from e
 
-        with open(self._config.config_path) as f:
+        with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         self._width = cfg.get("width", 224)
@@ -122,7 +123,7 @@ class PoseEstimator(CameraMotionMixIn):
         )
 
         topology_file = Path(trt_pose.coco.__file__).parent / "human_pose.json"
-        with open(topology_file) as f:
+        with open(topology_file, encoding="utf-8") as f:
             human_pose = json.load(f)
 
         self._topology = trt_pose.coco.coco_category_to_topology(human_pose)
@@ -175,7 +176,9 @@ class PoseEstimator(CameraMotionMixIn):
         counts, objects, peaks = self._parse_obj(cmap, paf)
         return counts, objects, peaks
 
-    def annotate_frame(self, frame: np.ndarray, counts: Any, objects: Any, peaks: Any) -> np.ndarray:
+    def annotate_frame(
+        self, frame: np.ndarray, counts: Any, objects: Any, peaks: Any
+    ) -> np.ndarray:
         """Overlay skeleton keypoints on a copy of frame."""
         out = frame.copy()
         h, w = out.shape[:2]
@@ -192,8 +195,6 @@ class PoseEstimator(CameraMotionMixIn):
         return out
 
     def run(self) -> None:
-        self._load()
-
         _stop = threading.Event()
 
         if self._config.stream:
@@ -207,7 +208,7 @@ class PoseEstimator(CameraMotionMixIn):
                 while not _stop.is_set():
                     frame = cam.read()
                     counts, objects, peaks = self.infer(frame)
-                    logger.debug("Detected {} person(s)".format(int(counts[0])))
+                    logger.debug(f"Detected {int(counts[0])} person(s)")
 
                     if self._server is not None:
                         self._push_frame(self.annotate_frame(frame, counts, objects, peaks))

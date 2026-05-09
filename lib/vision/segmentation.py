@@ -23,8 +23,8 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
-from lib.settings import PROJECT_ROOT_PATH
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.settings import PROJECT_ROOT_PATH
 
 
 class SegmentationConfig(BaseModel):
@@ -64,6 +64,7 @@ class Segmenter(CameraMotionMixIn):
         self._config = SegmentationConfig(**kwargs)
         self._net = None
         self._visualize = "overlay"
+        self._load()
 
     def _load(self) -> None:
         import yaml
@@ -79,7 +80,7 @@ class Segmenter(CameraMotionMixIn):
                 "jetson.inference is required for segmentation. It ships with JetPack 4.6.1."
             ) from e
 
-        with open(self._config.config_path) as f:
+        with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         model = cfg.get("model", "fcn-resnet18-voc")
@@ -89,8 +90,6 @@ class Segmenter(CameraMotionMixIn):
         logger.success(f"Loaded segNet model: {model}")
 
     def run(self) -> None:
-        self._load()
-
         _stop = threading.Event()
 
         if self._config.stream:

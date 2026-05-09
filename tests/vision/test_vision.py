@@ -11,16 +11,14 @@ Hardware-dependent tests (marked @pytest.mark.hardware) are skipped on CI.
 
 import argparse
 import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
 
-from lib.settings import NanoSettings, PROJECT_ROOT_PATH
+from lib.settings import PROJECT_ROOT_PATH, NanoSettings
 
 
 def _make_parser(settings: NanoSettings = None) -> argparse.ArgumentParser:
@@ -43,7 +41,7 @@ def _dummy_frame(h=480, w=640) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
 
 
-# commands/vision.py — sub-command structure 
+# commands/vision.py — sub-command structure
 class TestRegister:
     def test_detect_subcommand_exists(self):
         ns = _parse(["detect"])
@@ -121,14 +119,16 @@ class TestTrackDefaults:
 class TestObjectTracker:
     def test_import(self):
         from lib.vision.tracker import ObjectTracker
+
         assert ObjectTracker is not None
 
     def test_red_centroid_in_red_frame(self):
         """A pure-red frame should yield a centroid near the horizontal centre."""
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[:, :, 2] = 200   # high R in BGR → red in HSV
+        frame[:, :, 2] = 200  # high R in BGR → red in HSV
         centroid, _ = tracker._find_color_centroid(frame)
         assert centroid is not None
         cx, _ = centroid
@@ -136,6 +136,7 @@ class TestObjectTracker:
 
     def test_blank_frame_returns_none(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
         frame = np.full((480, 640, 3), 128, dtype=np.uint8)
         centroid, _ = tracker._find_color_centroid(frame)
@@ -143,23 +144,26 @@ class TestObjectTracker:
 
     def test_annotate_runs_without_centroid(self):
         from lib.vision.tracker import ObjectTracker
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         out = ObjectTracker._annotate_frame(frame.copy(), None)
         assert out.shape == frame.shape
 
     def test_annotate_runs_with_centroid(self):
         from lib.vision.tracker import ObjectTracker
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         out = ObjectTracker._annotate_frame(frame.copy(), (320, 240))
         assert out.shape == frame.shape
 
     def test_left_stripe_gives_negative_error(self):
         """A target on the left should produce a negative steering error."""
-        from lib.vision.tracker import ObjectTracker, TrackerConfig, _Kp
+        from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="yellow").dict())
         # Yellow stripe on the left side of lower half
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        frame[240:, 10:80] = [0, 255, 255]   # BGR yellow
+        frame[240:, 10:80] = [0, 255, 255]  # BGR yellow
         centroid, _ = tracker._find_color_centroid(frame)
         if centroid is not None:
             cx, _ = centroid
@@ -168,6 +172,7 @@ class TestObjectTracker:
 
     def test_right_stripe_gives_positive_error(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="yellow").dict())
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         frame[240:, 560:630] = [0, 255, 255]
@@ -179,6 +184,7 @@ class TestObjectTracker:
 
     def test_small_contour_returns_none(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         frame[240:243, 320:323, 2] = 200  # 3×3 = 9 px, well below _MIN_AREA
@@ -187,12 +193,15 @@ class TestObjectTracker:
 
     def test_find_blob_centroid_no_blob_returns_none(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="blob", color="red").dict())
         assert tracker._find_blob_centroid(np.zeros((480, 640, 3), dtype=np.uint8)) is None
 
     def test_find_blob_centroid_locates_blob(self):
         import cv2
+
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="blob", color="red").dict())
         frame = np.full((480, 640, 3), 50, dtype=np.uint8)
         cv2.circle(frame, (320, 240), 25, (255, 255, 255), -1)
@@ -203,6 +212,7 @@ class TestObjectTracker:
 
     def test_steer_to_no_centroid_turns_right(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
         tracker._motors = MagicMock()
         tracker._steer_to(np.zeros((480, 640, 3), dtype=np.uint8), None)
@@ -210,6 +220,7 @@ class TestObjectTracker:
 
     def test_steer_to_centroid_right_of_center(self):
         from lib.vision.tracker import ObjectTracker, TrackerConfig
+
         tracker = ObjectTracker(**TrackerConfig(mode="color", color="red").dict())
         tracker._motors = MagicMock()
         tracker._steer_to(np.zeros((480, 640, 3), dtype=np.uint8), (480, 240))
@@ -218,11 +229,13 @@ class TestObjectTracker:
 
     def test_config_invalid_mode_raises(self):
         from lib.vision.tracker import TrackerConfig
+
         with pytest.raises(ValueError):
             TrackerConfig(mode="laser", color="red")
 
     def test_config_invalid_color_raises(self):
         from lib.vision.tracker import TrackerConfig
+
         with pytest.raises(ValueError):
             TrackerConfig(mode="color", color="purple")
 
@@ -231,32 +244,36 @@ class TestObjectTracker:
 class TestObjectDetector:
     def test_import(self):
         from lib.vision.detector import ObjectDetector
+
         assert ObjectDetector is not None
 
     def test_annotate_empty(self):
         from lib.vision.detector import ObjectDetector
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         out = ObjectDetector._annotate_frame(frame.copy(), [])
         assert out.shape == frame.shape
 
     def test_annotate_draws_box(self):
         from lib.vision.detector import ObjectDetector
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = [{"label": "person", "conf": 0.9, "bbox": (10, 10, 200, 300)}]
         out = ObjectDetector._annotate_frame(frame.copy(), dets)
         assert not np.array_equal(out, frame)
 
     def test_missing_config_raises(self, tmp_path):
-        from lib.vision.detector import DetectionConfig
         from pydantic import ValidationError
+
+        from lib.vision.detector import DetectionConfig
+
         with pytest.raises(ValidationError):
             DetectionConfig(config_path=str(tmp_path / "missing.yaml"))
 
     def test_threshold_default(self):
         from lib.vision.detector import DetectionConfig
-        cfg = DetectionConfig(
-            config_path=str(PROJECT_ROOT_PATH / "config/models/detection.yaml")
-        )
+
+        cfg = DetectionConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/detection.yaml"))
         assert cfg.threshold == 0.5
 
 
@@ -264,16 +281,19 @@ class TestObjectDetector:
 class TestFaceDetector:
     def test_import(self):
         from lib.vision.face_detector import FaceDetector
+
         assert FaceDetector is not None
 
     def test_annotate_no_detections(self):
         from lib.vision.face_detector import FaceDetector
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         out = FaceDetector._annotate_frame(frame.copy(), [])
         assert np.array_equal(out, frame)
 
     def test_annotate_face(self):
         from lib.vision.face_detector import FaceDetector
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = [{"label": "face", "bbox": (50, 50, 200, 200)}]
         out = FaceDetector._annotate_frame(frame.copy(), dets)
@@ -281,14 +301,17 @@ class TestFaceDetector:
 
     def test_annotate_face_with_conf(self):
         from lib.vision.face_detector import FaceDetector
+
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = [{"label": "face", "conf": 0.92, "bbox": (50, 50, 200, 200)}]
         out = FaceDetector._annotate_frame(frame.copy(), dets)
         assert not np.array_equal(out, frame)
 
     def test_missing_config_raises(self, tmp_path):
-        from lib.vision.face_detector import FaceDetectionConfig
         from pydantic import ValidationError
+
+        from lib.vision.face_detector import FaceDetectionConfig
+
         with pytest.raises(ValidationError):
             FaceDetectionConfig(config_path=str(tmp_path / "missing.yaml"))
 
@@ -297,11 +320,14 @@ class TestFaceDetector:
 class TestSegmenter:
     def test_import(self):
         from lib.vision.segmentation import Segmenter
+
         assert Segmenter is not None
 
     def test_missing_config_raises(self, tmp_path):
-        from lib.vision.segmentation import SegmentationConfig
         from pydantic import ValidationError
+
+        from lib.vision.segmentation import SegmentationConfig
+
         with pytest.raises(ValidationError):
             SegmentationConfig(config_path=str(tmp_path / "missing.yaml"))
 
@@ -310,11 +336,14 @@ class TestSegmenter:
 class TestPoseEstimator:
     def test_import(self):
         from lib.vision.pose import PoseEstimator
+
         assert PoseEstimator is not None
 
     def test_missing_config_raises(self, tmp_path):
-        from lib.vision.pose import PoseConfig
         from pydantic import ValidationError
+
+        from lib.vision.pose import PoseConfig
+
         with pytest.raises(ValidationError):
             PoseConfig(config_path=str(tmp_path / "missing.yaml"))
 
@@ -323,10 +352,13 @@ class TestPoseEstimator:
 class TestGestureController:
     def test_import(self):
         from lib.vision.gesture import GestureController
+
         assert GestureController is not None
 
     def test_missing_config_raises(self, tmp_path):
-        from lib.vision.gesture import GestureConfig
         from pydantic import ValidationError
+
+        from lib.vision.gesture import GestureConfig
+
         with pytest.raises(ValidationError):
             GestureConfig(config_path=str(tmp_path / "missing.yaml"))

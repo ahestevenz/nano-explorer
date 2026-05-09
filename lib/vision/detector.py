@@ -85,6 +85,7 @@ class ObjectDetector(CameraMotionMixIn):
         self._net = None
         self._labels = []
         self._backend = None
+        self._load()
 
     def _load(self) -> None:
         import os
@@ -100,7 +101,7 @@ class ObjectDetector(CameraMotionMixIn):
         # Restore default SIGINT so Ctrl+C works even during TRT model loading
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        with open(self._config.config_path) as f:
+        with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         self._backend = ObjectDetectorBackend(cfg.get("backend"))
@@ -126,7 +127,7 @@ class ObjectDetector(CameraMotionMixIn):
             self._net = cv2.dnn.readNet(cfg["model"], cfg["config"])
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-            with open(cfg["labels"]) as f:
+            with open(cfg["labels"], encoding="utf-8") as f:
                 self._labels = [ln.strip() for ln in f]
             self._inp_w = cfg.get("input_width", 300)
             self._inp_h = cfg.get("input_height", 300)
@@ -185,8 +186,6 @@ class ObjectDetector(CameraMotionMixIn):
         # Ensure Ctrl+C is always catchable
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        self._load()
-
         cam = self._open_camera()
         _stop = threading.Event()
 
@@ -203,9 +202,7 @@ class ObjectDetector(CameraMotionMixIn):
                 detections = self._detect_fn(frame)
 
                 for d in detections:
-                    logger.info(
-                        "{:<22} conf={:.2f}  bbox={}".format(d["label"], d["conf"], d["bbox"])
-                    )
+                    logger.info(f"{d['label']:<22} conf={d['conf']:.2f}  bbox={d['bbox']}")
 
                 if self._config.stream and self._server is not None:
                     self._push_frame(self._annotate_frame(frame, detections))
@@ -218,14 +215,14 @@ class ObjectDetector(CameraMotionMixIn):
             if self._server is not None:
                 self._server.stop()
             logger.info("Detector stopped.")
-            
+
     @staticmethod
     def _annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
         """Draw bounding boxes, labels, and detection count onto a copy of frame."""
         out = frame.copy()
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
-            label = "{:<20} {:.2f}".format(d["label"], d["conf"])
+            label = f"{d['label']:<20} {d['conf']:.2f}"
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
                 out,
@@ -239,7 +236,7 @@ class ObjectDetector(CameraMotionMixIn):
             )
         cv2.putText(
             out,
-            "{} object(s)".format(len(detections)),
+            f"{len(detections)} object(s)",
             (10, out.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
