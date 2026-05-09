@@ -93,6 +93,7 @@ disable = [
     "W0107",  # unnecessary-pass
     "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
     "E0611",  # no-name-in-module
+    "E501",   # line-too-long
 ]
 
 [tool.pylint.format]
