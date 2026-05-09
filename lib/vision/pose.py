@@ -135,12 +135,16 @@ class PoseEstimator(CameraMotionMixIn):
         base_model = trt_pose.models.resnet18_baseline_att(num_parts, 2 * num_links).cuda().eval()
 
         weights_path = Path(cfg["model_weights"])
+        if not weights_path.is_absolute():
+            weights_path = PROJECT_ROOT_PATH / weights_path
         engine_path = Path(
             cfg.get(
                 "model_engine",
                 str(weights_path).replace(".pth", "_trt.engine"),
             )
         )
+        if not engine_path.is_absolute():
+            engine_path = PROJECT_ROOT_PATH / engine_path
 
         if engine_path.exists():
             from torch2trt import TRTModule  # pylint: disable=import-error
