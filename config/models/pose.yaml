@@ -1,0 +1,20 @@
+# Pose Estimation Configuration
+# Used by: nano-explorer vision pose
+#          nano-explorer vision gesture
+#
+# model_weights:
+#   ResNet18-based model (~21 MB). Download from:
+#   https://drive.google.com/uc?id=1XYDdCUdiF2xxx39O6ysY9TqSnJEPKPE6
+#   Place at: assets/models/resnet18_baseline_att_224x224_A_epoch_249.pth
+#
+# model_engine:
+#   TensorRT engine (auto-built on first run, ~5 min).
+#   Subsequent runs load this directly for faster startup.
+
+model_weights: assets/models/resnet18_baseline_att_224x224_A_epoch_249.pth
+model_engine:  assets/models/resnet18_baseline_att_224x224_A_trt.engine
+
+topology: human_pose   # COCO 17-keypoint — only supported value
+
+width:  224
+height: 224

@@ -35,13 +35,13 @@ import os
 import sys
 import threading
 import time
+from typing import Any, Optional
 
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera, MjpegServer
+from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.motor import MotorController
-from lib.network import get_wifi_ip
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -57,7 +57,7 @@ _TIME_OUT: float = 0.05
 _NUMBER_BYTES_TO_READ: int = 3
 
 
-def _import_keyboard():
+def _import_keyboard() -> Any:
     """
     Try every available pynput backend in order.
     Returns kb module on success, raises RuntimeError if all fail.
@@ -147,14 +147,14 @@ class TeleopConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
 
     @validator("mode")
-    def mode_must_be_valid(cls, v):  # pylint: disable=no-self-argument
+    def mode_must_be_valid(cls, v: str) -> str:  # pylint: disable=no-self-argument
         allowed = {"auto", "arrows", "pynput", "stdin"}
         if v not in allowed:
             raise ValueError(f"mode must be one of {allowed}")
         return v
 
 
-class TeleopController:
+class TeleopController(CameraMotionMixIn):
     """
     Keyboard-driven teleoperation controller.
 
@@ -163,13 +163,10 @@ class TeleopController:
     argparse values directly.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__()
         self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
-        self._running = False
-        self._server = None
-        ip = get_wifi_ip()
-        self._nano_ip: str = ip if ip is not None else "<nano-ip>"
 
     def run(self) -> None:
         if self._config.mode == "auto":
@@ -182,24 +179,6 @@ class TeleopController:
             self._run_stdin()
         else:
             raise ValueError(f"Unknown teleop mode: {self._config.mode}")
-
-    def _open_camera(self) -> Camera:
-        """Open the single shared camera instance."""
-        cam = Camera()
-        cam.open()
-        return cam
-
-    def _close_camera(self, cam: Camera) -> None:
-        """Stop the MJPEG server first, then release the camera."""
-        if self._server is not None:
-            self._server.stop()
-            self._server = None
-        cam.release()
-
-    def _start_stream(self) -> None:
-        """Start the MJPEG server pointed at the shared frame buffer."""
-        self._server = MjpegServer(port=self._config.stream_port)
-        self._server.start()
 
     # Mode: auto
     def _run_auto(self) -> None:
@@ -219,36 +198,34 @@ class TeleopController:
         self._run_stdin()
 
     # Mode: raw arrow keys
-    def _run_arrows(self) -> None:
+    def _run_arrows(self, stop_event: Optional[threading.Event] = None) -> None:
         """
         Read raw terminal bytes.  Arrow keys produce 3-byte escape sequences.
         A background timer stops the robot if no key arrives within _KEY_TIMEOUT.
+
+        Args:
+            stop_event: Optional shared threading.Event. When provided (vision+teleop
+                        mode) both sides signal each other through this event. When
+                        omitted (standalone teleop) an internal event is used.
         """
+        print(
+            "\n[teleop] Arrow keys to drive  |  q = quit\n"
+            "         Hold key -> move  |  Release -> stop\n"
+        )
+
         import select
         import termios
         import tty
 
-        _help = (
-            "\n[teleop] Arrow keys to drive  |  q = quit\n"
-            "         Hold key -> move  |  Release -> stop\n"
-        )
-        if self._config.stream:
-            url = f"http://{self._nano_ip}:{self._config.stream_port}/stream"
-            _help += f"         Camera stream -> {url}\n"
-        print(_help)
-
         self._motors.open()
         cam = None
+        _stop = stop_event if stop_event is not None else threading.Event()
 
-        # Start MJPEG server only after camera is confirmed open
-        _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
-            self._start_capture_thread(cam, _stop_capture)
+            self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
 
-        self._running = True
-        stop_timer = None  # threading.Timer
+        stop_timer = None
 
         def _schedule_stop() -> None:
             nonlocal stop_timer
@@ -258,38 +235,44 @@ class TeleopController:
             stop_timer.daemon = True
             stop_timer.start()
 
+        # Cosmetic: fix log line alignment in raw terminal mode
+        # tty.setraw() strips carriage returns from stderr, causing loguru output
+        # to start mid-line when the robot is idle. We temporarily replace the
+        # default sink with one that prepends \r to reset the cursor to column 0.
+        def _raw_sink(message: str) -> None:
+            sys.stderr.write("\r" + str(message))
+            sys.stderr.flush()
+
+        logger.remove()
+        raw_id = logger.add(_raw_sink, colorize=True)
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
 
         try:
             tty.setraw(fd)
-
-            while self._running:
+            while not _stop.is_set():
                 ready, _, _ = select.select([sys.stdin], [], [], _TIME_OUT)
                 if not ready:
                     continue
-
                 chunk = os.read(fd, _NUMBER_BYTES_TO_READ)
-
                 if chunk in (b"q", b"Q", b"\x03"):
+                    _stop.set()
                     break
-
                 action = _ARROW_MAP.get(chunk)
                 if action is None:
                     continue
-
                 self._apply_action(action)
                 _schedule_stop()
-
         except Exception as exc:
             logger.error(f"Arrow teleop error: {exc}")
         finally:
             if stop_timer is not None:
                 stop_timer.cancel()
+            logger.remove(raw_id)
+            logger.add(sys.stderr, colorize=True)  # restore default sink
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             self._motors.stop()
             self._motors.close()
-            _stop_capture.set()
             if cam:
                 self._close_camera(cam)
             print("\n[teleop] stopped.")
@@ -318,7 +301,7 @@ class TeleopController:
         current_action = ["stop"]
         running = [True]
 
-        def on_press(key) -> None:
+        def on_press(key: Any) -> None:
             action = keymap.get(key)
             if action:
                 current_action[0] = action
@@ -330,7 +313,7 @@ class TeleopController:
                 if key == kb.Key.esc:
                     running[0] = False
 
-        def on_release(key) -> None:
+        def on_release(key: Any) -> None:
             if key in keymap:
                 current_action[0] = "stop"
 
@@ -340,10 +323,8 @@ class TeleopController:
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
-            self._start_capture_thread(cam, _stop_capture)
-            logger.info(
-                f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream"
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
             )
 
         with kb.Listener(on_press=on_press, on_release=on_release) as listener:
@@ -370,9 +351,9 @@ class TeleopController:
         _stop_capture = threading.Event()
         if self._config.stream:
             cam = self._open_camera()
-            self._start_stream()
-            self._start_capture_thread(cam, _stop_capture)
-            print(f"Camera stream -> http://{self._nano_ip}:{self._config.stream_port}/stream\n")
+            self._start_stream(
+                cam=cam, stop_event=_stop_capture, stream_port=self._config.stream_port
+            )
         try:
             while True:
                 try:
@@ -409,24 +390,5 @@ class TeleopController:
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
-        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}  ")
+        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}\r\n")
         sys.stdout.flush()
-
-    def _start_capture_thread(self, cam: Camera, stop_event: threading.Event) -> threading.Thread:
-        """
-        Push frames from cam into the stream buffer in a dedicated thread.
-        Decouples capture rate from the input/control loop so the stream
-        never freezes while waiting for a keypress or blocking read().
-        """
-
-        def _loop():
-            while not stop_event.is_set():
-                try:
-                    frame = cam.read()
-                    self._server.frame_buffer.put(frame)
-                except Exception:
-                    break
-
-        t = threading.Thread(target=_loop, daemon=True)
-        t.start()
-        return t

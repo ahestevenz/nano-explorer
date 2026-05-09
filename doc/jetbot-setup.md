@@ -108,7 +108,132 @@ sudo python3 setup.py install
 ```
 ---
 
-## Step 7 — Verify Hardware
+## Step 7 — Install jetson-inference
+
+Clone the repository:
+
+```bash
+git clone --recursive --depth=1 https://github.com/dusty-nv/jetson-inference
+cd jetson-inference
+```
+
+Before building, two patches are required to make the CMake build compatible
+with **numpy 1.19.5** on JetPack 4.6.1. The `npymath` static library is not
+present in this numpy version and must be removed from both binding targets.
+
+**Patch 1** — `python/bindings/CMakeLists.txt`:
+
+```bash
+python3 - << 'PYEOF'
+import re
+path = "python/bindings/CMakeLists.txt"
+with open(path) as f:
+    content = f.read()
+patched = re.sub(r'(\s*)(.*npymath.*)', r'\1# \2', content)
+with open(path, "w") as f:
+    f.write(patched)
+print("Patch 1 applied.")
+PYEOF
+```
+
+**Patch 2** — `utils/python/bindings/CMakeLists.txt`:
+
+```bash
+python3 - << 'PYEOF'
+path = "utils/python/bindings/CMakeLists.txt"
+with open(path) as f:
+    lines = f.readlines()
+new_lines = [
+    "  # npymath removed — not available with numpy 1.19.5 on JetPack 4.6.1\n"
+    if "npymath" in line and not line.strip().startswith("#")
+    else line
+    for line in lines
+]
+with open(path, "w") as f:
+    f.writelines(new_lines)
+print("Patch 2 applied.")
+PYEOF
+```
+
+Verify both patches are clean before building:
+
+```bash
+grep -rn "npymath" python/bindings/CMakeLists.txt \
+                   utils/python/bindings/CMakeLists.txt \
+  | grep -v "^.*:.*#"
+# Should print nothing
+```
+
+Build and install:
+
+```bash
+mkdir build && cd build
+cmake -DPYTHON3_PACKAGES=ON ..
+make -j4
+sudo make install
+sudo ldconfig
+```
+
+Verify the installation:
+
+```bash
+python3 -c "import jetson_inference; print('jetson_inference OK')"
+python3 -c "import jetson_utils; print('jetson_utils OK')"
+```
+
+> **Note:** The older `jetson.inference` / `jetson.utils` dot-notation imports
+> still work but are deprecated. Use `jetson_inference` and `jetson_utils`
+> (underscore) in new code.
+
+---
+
+## Step 8 — Install torch2trt and trt_pose (Pose Estimation)
+
+Required for `nano-explorer vision pose` and `nano-explorer vision gesture`.
+
+### Dependencies
+
+```bash
+pip3 install tqdm cython pycocotools
+```
+
+### Install torch2trt
+
+```bash
+cd ~/code
+git clone https://github.com/NVIDIA-AI-IOT/torch2trt
+cd torch2trt
+git checkout 9a048b0
+python3 setup.py install   # use your virtualenv python3, not sudo
+```
+
+### Install trt_pose
+
+```bash
+cd ~/code
+git clone https://github.com/NVIDIA-AI-IOT/trt_pose
+cd trt_pose
+python3 setup.py install
+```
+
+### Copy the topology file into the package
+
+trt_pose does not install `human_pose.json` into the package directory.
+Copy it manually so `pose.py` can find it:
+
+```bash
+cp ~/code/trt_pose/tasks/human_pose/human_pose.json \
+   ~/.virtualenvs/nano_explorer_py36/lib/python3.6/site-packages/trt_pose-0.0.1-py3.6-linux-aarch64.egg/trt_pose/
+```
+
+### Download model weights
+
+The official Google Drive link is currently inaccessible.
+Download the weights manually from a browser on your laptop:
+
+---
+
+## Step 9 — Verify Hardware
 
 ### Camera
 ```bash
@@ -124,7 +249,7 @@ The motor driver (typically at address `0x40` or `0x60`) should appear in the gr
 
 ---
 
-## Step 8 — Verify Camera with GStreamer + OpenCV
+## Step 10 — Verify Camera with GStreamer + OpenCV
 
 Run this quick test to confirm the CSI camera pipeline is working end-to-end:
 ```bash
