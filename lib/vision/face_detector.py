@@ -121,7 +121,8 @@ class FaceDetector(CameraMotionMixIn):
 
         else:
             raise ValueError(
-                f"Unknown backend '{self._backend}'. Choose: {[b.value for b in FaceDetectorBackend]} ."
+                f"Unknown backend '{self._backend}'."
+                f" Choose: {[b.value for b in FaceDetectorBackend]}."
             )
 
     def _detect_haar(self, frame: np.ndarray) -> List[dict]:

@@ -122,7 +122,8 @@ class ObjectDetector(CameraMotionMixIn):
             for key in ("model", "config", "labels"):
                 if key not in cfg:
                     raise ValueError(
-                        f"{ObjectDetectorBackend.OPENCV_DNN} backend requires '{key}' in config YAML"
+                        f"{ObjectDetectorBackend.OPENCV_DNN} backend"
+                        f" requires '{key}' in config YAML"
                     )
             self._net = cv2.dnn.readNet(cfg["model"], cfg["config"])
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
@@ -136,7 +137,8 @@ class ObjectDetector(CameraMotionMixIn):
 
         else:
             raise ValueError(
-                f"Unknown backend '{self._backend}'. Choose: {[b.value for b in ObjectDetectorBackend]}."
+                f"Unknown backend '{self._backend}'."
+                f" Choose: {[b.value for b in ObjectDetectorBackend]}."
             )
 
     def _detect_jetsoni(self, frame: np.ndarray) -> List[dict]:
