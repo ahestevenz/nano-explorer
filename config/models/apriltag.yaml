@@ -1,0 +1,9 @@
+# AprilTag / ArUco navigation configuration
+# Tag family — must match the printed markers in the environment
+# Supported: tag36h11 | tag25h9 | tag16h5 | tagStandard41h12
+family: tag36h11
+
+# Detection tuning
+nthreads: 2
+quad_decimate: 2.0   # decimation factor for speed/accuracy trade-off
+refine_edges: true

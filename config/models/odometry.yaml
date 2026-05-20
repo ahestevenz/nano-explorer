@@ -1,0 +1,10 @@
+# Visual odometry configuration
+# Feature detector backend
+# Supported: orb | sift | akaze
+feature_detector: orb
+
+# Maximum number of features to detect per frame
+max_features: 500
+
+# Lowe's ratio test threshold for descriptor matching
+match_ratio: 0.75

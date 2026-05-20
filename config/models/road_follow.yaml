@@ -1,0 +1,7 @@
+# Road follower (regression) configuration
+# Architecture used when building / loading the model
+arch: resnet18
+
+# Input resolution the model was trained on
+input_width: 224
+input_height: 224
