@@ -11,8 +11,8 @@ YAML fields (config/models/apriltag.yaml):
     quad_decimate: Speed/accuracy trade-off (default: 2.0).
     refine_edges:  bool (default: true).
 
-Requires the ``apriltag`` Python package:
-    pip install apriltag          (or from source: github.com/duckietown/apriltag)
+Requires the ``pupil-apriltags`` Python package:
+    pip install pupil-apriltags
 
 Steering law:
     error    = (tag_cx − frame_cx) / frame_cx     # [-1, 1]
@@ -82,18 +82,17 @@ class AprilTagNavigator(CameraMotionMixIn):
 
     def _load(self) -> None:
         import yaml
-        import apriltag  # pylint: disable=import-error
+        import pupil_apriltags  # pylint: disable=import-error
 
         with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
-        options = apriltag.DetectorOptions(
+        self._detector = pupil_apriltags.Detector(
             families=cfg.get("family", "tag36h11"),
             nthreads=int(cfg.get("nthreads", 2)),
             quad_decimate=float(cfg.get("quad_decimate", 2.0)),
-            refine_edges=bool(cfg.get("refine_edges", True)),
+            refine_edges=int(cfg.get("refine_edges", True)),
         )
-        self._detector = apriltag.Detector(options)
         logger.success(f"AprilTag detector ready — family={cfg.get('family', 'tag36h11')}")
 
     def _detect(self, frame: np.ndarray) -> List[dict]:

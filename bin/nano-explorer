@@ -100,15 +100,6 @@ def build_parser(settings: NanoSettings):
     )
     register_map(map_parser, settings)
 
-    # Machine learning
-    from commands.cmd_ml import register as register_ml  # pylint: disable=E0611, E0401
-
-    ml_parser = subparsers.add_parser(
-        "ml",
-        help="[Experimental] Behaviour cloning -- record, train, deploy",
-    )
-    register_ml(ml_parser)
-
     return parser
 
 

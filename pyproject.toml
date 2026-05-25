@@ -118,7 +118,7 @@ ignored-modules = [
     "jetbot", "jetson", "board", "busio",
     "adafruit_pca9685", "adafruit_motor",
     "cv2", "torch", "torchvision", "trt_pose", "torch2trt",
-    "pynput", "apriltag", "colorama", "aiohttp",
+    "pynput", "pupil_apriltags", "colorama", "aiohttp",
 ]
 ignored-classes = ["jetbot.Robot"]
 
