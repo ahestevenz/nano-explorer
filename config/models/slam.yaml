@@ -2,7 +2,7 @@
 # Backend — orbslam2 requires the Python bindings from github.com/muskie82/MonoSLAM
 # Backend — rtabmap requires python3-rtabmap from apt
 # Supported: orbslam2 | rtabmap
-backend: orbslam2
+backend: rtabmap
 
 # ORB-SLAM2: path to the ORB vocabulary file
 # Download from: https://github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary
