@@ -1,21 +1,13 @@
 """
 Minimal monocular SLAM for the JetBot.
 
-Two backends are supported, selected via config YAML:
-
-  orbslam2   ORB-SLAM2 monocular mode.  Requires the Python bindings
-             from github.com/muskie82/MonoSLAM or the pybind11 wrapper.
-             Needs an ORB vocabulary file (ORBvoc.txt, ~1 MB download).
-             Expect drift without an IMU but loop closure works in small rooms.
-
-  rtabmap    RTAB-Map RGB-only monocular graph-SLAM.  Install via:
-                 sudo apt install ros-noetic-rtabmap  (or python3-rtabmap).
-             RTAB-Map manages its own database; the path is written next
-             to the config file as ``slam.db``.
+Backend: ORB-SLAM2 monocular mode.  Requires the Python bindings from
+github.com/muskie82/MonoSLAM.  Needs an ORB vocabulary file (ORBvoc.txt).
+Expect drift without an IMU; loop closure works in small rooms.
 
 YAML fields (config/models/slam.yaml):
-    backend:    "orbslam2" | "rtabmap"
-    vocabulary: path to ORBvoc.txt          (orbslam2 only)
+    backend:    "orbslam2"
+    vocabulary: path to ORBvoc.txt
 
 All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
@@ -32,7 +24,7 @@ from pydantic import BaseModel, Field, validator
 from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.settings import PROJECT_ROOT_PATH
 
-_VALID_BACKENDS = ["orbslam2", "rtabmap"]
+_VALID_BACKENDS = ["orbslam2"]
 
 # Tracking state labels used by ORB-SLAM2
 _ORBSLAM2_STATES = {0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
@@ -85,10 +77,7 @@ class SlamMapper(CameraMotionMixIn):
         if self._backend not in _VALID_BACKENDS:
             raise ValueError(f"backend must be one of {_VALID_BACKENDS}")
 
-        if self._backend == "orbslam2":
-            self._load_orbslam2(cfg)
-        else:
-            self._load_rtabmap(cfg)
+        self._load_orbslam2(cfg)
 
     def _load_orbslam2(self, cfg: dict) -> None:
         try:
@@ -109,26 +98,10 @@ class SlamMapper(CameraMotionMixIn):
         self._slam.set_use_viewer(False)
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}")
 
-    def _load_rtabmap(self, cfg: dict) -> None:  # pylint: disable=unused-argument
-        try:
-            from rtabmap.util import rtabmap as rtab  # pylint: disable=import-error
-        except ImportError as e:
-            raise RuntimeError(
-                "RTAB-Map Python bindings not found.\n"
-                "Install with: sudo apt install python3-rtabmap"
-            ) from e
-        self._slam = rtab.Rtabmap()
-        self._slam.init()
-        logger.success("RTAB-Map initialised")
-
     def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         state = self._slam.process_image_mono(gray, timestamp)
         return int(state)
-
-    def _process_frame_rtabmap(self, frame: np.ndarray, timestamp: float) -> bool:
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return bool(self._slam.process(rgb, timestamp))
 
     def run(self) -> None:
         import signal
@@ -150,14 +123,9 @@ class SlamMapper(CameraMotionMixIn):
                 frame = cam.read()
                 ts = time.time()
 
-                if self._backend == "orbslam2":
-                    state = self._process_frame_orbslam2(frame, ts)
-                    label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
-                    logger.debug(f"ORB-SLAM2 state={label}")
-                else:
-                    ok = self._process_frame_rtabmap(frame, ts)
-                    label = "TRACKING" if ok else "LOST"
-                    logger.debug(f"RTAB-Map tracking={ok}")
+                state = self._process_frame_orbslam2(frame, ts)
+                label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
+                logger.debug(f"ORB-SLAM2 state={label}")
 
                 if self._config.stream and self._server is not None:
                     self._push_frame(self._annotate_frame(frame, label, self._backend))
