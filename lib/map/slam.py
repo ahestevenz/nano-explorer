@@ -130,7 +130,7 @@ class SlamMapper(CameraMotionMixIn):
         cam = self._open_camera()
 
         if self._config.stream:
-            self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
+            self._start_server_stream(stream_port=self._config.stream_port)
 
         self._start_teleop_thread(
             stop_event=_stop,
@@ -215,8 +215,8 @@ class SlamMapper(CameraMotionMixIn):
             (10, map_size - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1, cv2.LINE_AA,
         )
 
-        # Camera PiP — top-right corner, 1/4 height of canvas
-        pip_h = map_size // 4
+        # Camera PiP — top-right corner, 1/6 height of canvas
+        pip_h = map_size // 6
         pip_w = int(cam_frame.shape[1] * pip_h / cam_frame.shape[0])
         pip = cv2.resize(cam_frame, (pip_w, pip_h))
         margin = 8
