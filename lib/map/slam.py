@@ -111,6 +111,7 @@ class SlamMapper(CameraMotionMixIn):
 
     def run(self) -> None:
         import signal
+        import sys
         import time
 
         signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -122,7 +123,22 @@ class SlamMapper(CameraMotionMixIn):
         if self._config.stream:
             self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
 
-        logger.info(f"SLAM running — backend={self._backend}  (Ctrl+C to stop)")
+        def _watch_stdin() -> None:
+            import select
+            try:
+                while not _stop.is_set():
+                    if select.select([sys.stdin], [], [], 0.2)[0]:
+                        line = sys.stdin.readline()
+                        if line.strip().lower() in ("q", "quit"):
+                            logger.info("Quit signal received — stopping SLAM...")
+                            _stop.set()
+                            return
+            except Exception:
+                pass
+
+        threading.Thread(target=_watch_stdin, daemon=True).start()
+
+        logger.info(f"SLAM running — backend={self._backend}  (type 'q' + Enter to stop)")
 
         try:
             while not _stop.is_set():
