@@ -46,11 +46,15 @@ class OdometryConfig(BaseModel):
         config_path:  Path to odometry YAML config.
         stream:       Serve annotated MJPEG stream.
         stream_port:  MJPEG server port.
+        speed:        Motor speed [0.0, 1.0].
+        turn_gain:    Turn gain [0.0, 1.0].
     """
 
     config_path: Path = PROJECT_ROOT_PATH / "config/models/odometry.yaml"
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
     @validator("config_path")
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
@@ -168,9 +172,14 @@ class VisualOdometry(CameraMotionMixIn):
         cam = self._open_camera()
 
         if self._config.stream:
-            self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
+            self._start_server_stream(stream_port=self._config.stream_port)
 
-        logger.info("Visual odometry running — Ctrl+C to stop")
+        self._start_teleop_thread(
+            stop_event=_stop,
+            speed=self._config.speed,
+            turn_gain=self._config.turn_gain,
+        )
+        logger.info("Visual odometry running — (arrow keys to drive, q to stop)")
 
         try:
             while not _stop.is_set():
@@ -207,6 +216,7 @@ class VisualOdometry(CameraMotionMixIn):
             _stop.set()
             self._close_camera(cam)
             logger.info("Visual odometry stopped.")
+
 
     @staticmethod
     def _annotate_frame(
