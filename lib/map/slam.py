@@ -154,8 +154,9 @@ class SlamMapper(CameraMotionMixIn):
                 if self._config.stream and self._server is not None:
                     traj = self._get_trajectory()
                     h, w = frame.shape[:2]
+                    scale = 2
                     self._push_frame(
-                        self._render_map_view(traj, frame, label, self._backend, w, h)
+                        self._render_map_view(traj, frame, label, self._backend, w * scale, h * scale)
                     )
 
         except KeyboardInterrupt:
