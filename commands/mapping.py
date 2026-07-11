@@ -47,7 +47,7 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     # slam
     p_slam = sub.add_parser(
         "slam",
-        help="[Experimental] Minimal monocular SLAM (ORB-SLAM2 or RTAB-Map)",
+        help="[Experimental] Minimal monocular SLAM (ORB-SLAM2)",
     )
     p_slam.add_argument(
         "--config",
@@ -70,12 +70,6 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         dest="stream_port",
         metavar="PORT",
         help="MJPEG server port (default: 8080)",
-    )
-    p_slam.add_argument(
-        "--teleop",
-        action="store_true",
-        default=False,
-        help="Enable arrow-key motor control while mapping",
     )
     p_slam.add_argument(
         "--speed",
