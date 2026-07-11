@@ -71,6 +71,27 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         metavar="PORT",
         help="MJPEG server port (default: 8080)",
     )
+    p_slam.add_argument(
+        "--teleop",
+        action="store_true",
+        default=False,
+        help="Enable arrow-key motor control while mapping",
+    )
+    p_slam.add_argument(
+        "--speed",
+        type=float,
+        default=0.3,
+        metavar="SPEED",
+        help="Motor speed 0.0-1.0 (default: 0.3)",
+    )
+    p_slam.add_argument(
+        "--turn-gain",
+        type=float,
+        default=0.5,
+        dest="turn_gain",
+        metavar="GAIN",
+        help="Turn gain 0.0-1.0 (default: 0.5)",
+    )
     p_slam.set_defaults(func=_run_slam)
 
 

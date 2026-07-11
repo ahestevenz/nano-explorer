@@ -38,11 +38,17 @@ class SlamConfig(BaseModel):
         config_path:  Path to SLAM YAML config.
         stream:       Serve annotated MJPEG stream.
         stream_port:  MJPEG server port.
+        teleop:       Enable arrow-key motor control while mapping.
+        speed:        Motor speed [0.0, 1.0].
+        turn_gain:    Turn gain [0.0, 1.0].
     """
 
     config_path: Path = PROJECT_ROOT_PATH / "config/models/slam.yaml"
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    teleop: bool = False
+    speed: float = Field(0.3, ge=0.0, le=1.0)
+    turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
     @validator("config_path")
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
@@ -123,22 +129,32 @@ class SlamMapper(CameraMotionMixIn):
         if self._config.stream:
             self._start_stream(cam=cam, stop_event=_stop, stream_port=self._config.stream_port)
 
-        def _watch_stdin() -> None:
-            import select
-            try:
-                while not _stop.is_set():
-                    if select.select([sys.stdin], [], [], 0.2)[0]:
-                        line = sys.stdin.readline()
-                        if line.strip().lower() in ("q", "quit"):
-                            logger.info("Quit signal received — stopping SLAM...")
-                            _stop.set()
-                            return
-            except Exception:
-                pass
+        if self._config.teleop:
+            self._start_teleop_thread(
+                stop_event=_stop,
+                speed=self._config.speed,
+                turn_gain=self._config.turn_gain,
+            )
+            logger.info(
+                f"SLAM running — backend={self._backend}  "
+                "(arrow keys to drive, q to stop)"
+            )
+        else:
+            def _watch_stdin() -> None:
+                import select
+                try:
+                    while not _stop.is_set():
+                        if select.select([sys.stdin], [], [], 0.2)[0]:
+                            line = sys.stdin.readline()
+                            if line.strip().lower() in ("q", "quit"):
+                                logger.info("Quit signal received — stopping SLAM...")
+                                _stop.set()
+                                return
+                except Exception:
+                    pass
 
-        threading.Thread(target=_watch_stdin, daemon=True).start()
-
-        logger.info(f"SLAM running — backend={self._backend}  (type 'q' + Enter to stop)")
+            threading.Thread(target=_watch_stdin, daemon=True).start()
+            logger.info(f"SLAM running — backend={self._backend}  (type 'q' + Enter to stop)")
 
         try:
             while not _stop.is_set():
