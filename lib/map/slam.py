@@ -85,7 +85,7 @@ class SlamMapper(CameraMotionMixIn):
         except ImportError as e:
             raise RuntimeError(
                 "orbslam2 Python bindings not found.\n"
-                "Build from: github.com/muskie82/MonoSLAM or use backend: rtabmap"
+                "Build from: github.com/muskie82/MonoSLAM"
             ) from e
 
         vocab = cfg.get("vocabulary", "assets/models/ORBvoc.txt")
@@ -94,9 +94,15 @@ class SlamMapper(CameraMotionMixIn):
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        self._slam = orbslam2.System(vocab, orbslam2.Sensor.MONOCULAR)
+        settings = cfg.get("settings", "config/models/orbslam2_mono.yaml")
+        if not Path(settings).exists():
+            raise FileNotFoundError(
+                f"ORB-SLAM2 settings not found: {settings}\n"
+                "Create camera calibration YAML at config/models/orbslam2_mono.yaml"
+            )
+        self._slam = orbslam2.System(vocab, settings, orbslam2.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
-        logger.success(f"ORB-SLAM2 initialised — vocab={vocab}")
+        logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
     def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
