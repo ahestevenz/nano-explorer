@@ -153,8 +153,9 @@ class SlamMapper(CameraMotionMixIn):
 
                 if self._config.stream and self._server is not None:
                     traj = self._get_trajectory()
+                    h, w = frame.shape[:2]
                     self._push_frame(
-                        self._render_map_view(traj, frame, label, self._backend)
+                        self._render_map_view(traj, frame, label, self._backend, w, h)
                     )
 
         except KeyboardInterrupt:
@@ -175,25 +176,28 @@ class SlamMapper(CameraMotionMixIn):
         cam_frame: np.ndarray,
         state_label: str,
         backend: str,
-        map_size: int = 480,
+        canvas_w: int,
+        canvas_h: int,
     ) -> np.ndarray:
         """
         Top-down trajectory map (main) with live camera PiP in the top-right corner.
 
+        Canvas matches the camera frame dimensions so the stream size is consistent.
         traj: list of 4x4 SE3 numpy arrays from get_trajectory_points().
         """
-        canvas = np.zeros((map_size, map_size, 3), dtype=np.uint8)
+        canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
 
         if traj:
             try:
-                # X-Z plane is the top-down view in ORB-SLAM2 coordinates
                 positions = np.array([[T[0, 3], T[2, 3]] for T in traj], dtype=np.float32)
                 pad = 40
                 x_range = float(np.ptp(positions[:, 0])) or 1.0
                 z_range = float(np.ptp(positions[:, 1])) or 1.0
-                scale = min((map_size - 2 * pad) / x_range, (map_size - 2 * pad) / z_range)
+                scale = min(
+                    (canvas_w - 2 * pad) / x_range,
+                    (canvas_h - 2 * pad) / z_range,
+                )
                 x_min, z_min = positions[:, 0].min(), positions[:, 1].min()
-
                 pts = [
                     (int((x - x_min) * scale + pad), int((z - z_min) * scale + pad))
                     for x, z in positions
@@ -204,7 +208,6 @@ class SlamMapper(CameraMotionMixIn):
             except Exception:  # pylint: disable=broad-except
                 pass
 
-        # State label
         color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
         cv2.putText(
             canvas, f"[{backend}] {state_label}",
@@ -212,15 +215,15 @@ class SlamMapper(CameraMotionMixIn):
         )
         cv2.putText(
             canvas, "TOP-DOWN MAP",
-            (10, map_size - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1, cv2.LINE_AA,
+            (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1, cv2.LINE_AA,
         )
 
-        # Camera PiP — top-right corner, 1/6 height of canvas
-        pip_h = map_size // 6
+        # Camera PiP — top-right corner, 1/5 of canvas height
+        pip_h = canvas_h // 5
         pip_w = int(cam_frame.shape[1] * pip_h / cam_frame.shape[0])
         pip = cv2.resize(cam_frame, (pip_w, pip_h))
         margin = 8
-        x1, y1 = map_size - pip_w - margin, margin
+        x1, y1 = canvas_w - pip_w - margin, margin
         canvas[y1 - 2 : y1 + pip_h + 2, x1 - 2 : x1 + pip_w + 2] = (80, 80, 80)
         canvas[y1 : y1 + pip_h, x1 : x1 + pip_w] = pip
 
