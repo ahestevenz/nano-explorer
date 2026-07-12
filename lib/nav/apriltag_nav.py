@@ -134,7 +134,8 @@ class AprilTagNavigator(CameraMotionMixIn):
         else:
             cam = self._open_camera()
 
-        logger.info("AprilTag navigator running — Ctrl+C to stop")
+        self._start_quit_listener(_stop)
+        logger.info("AprilTag navigator running — q or Ctrl+C to stop")
 
         try:
             while not _stop.is_set():

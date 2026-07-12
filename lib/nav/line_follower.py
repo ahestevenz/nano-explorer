@@ -201,9 +201,10 @@ class LineFollower(CameraMotionMixIn):
         else:
             cam = self._open_camera()
 
+        self._start_quit_listener(_stop)
         logger.info(
             f"Line follower running — mode={self._mode}  "
-            f"color={self._line_color}  speed={self._config.speed}  (Ctrl+C to stop)"
+            f"color={self._line_color}  speed={self._config.speed}  (q or Ctrl+C to stop)"
         )
 
         try:

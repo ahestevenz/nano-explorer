@@ -127,9 +127,10 @@ class RoadFollower(CameraMotionMixIn):
         else:
             cam = self._open_camera()
 
+        self._start_quit_listener(_stop)
         logger.info(
             f"Road follower running — speed={self._config.speed}  "
-            f"turn_gain={self._config.turn_gain}  (Ctrl+C to stop)"
+            f"turn_gain={self._config.turn_gain}  (q or Ctrl+C to stop)"
         )
 
         try:

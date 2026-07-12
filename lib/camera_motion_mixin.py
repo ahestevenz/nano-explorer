@@ -118,6 +118,42 @@ class CameraMotionMixIn:
         """
         self._server.frame_buffer.put(frame)
 
+    def _start_quit_listener(self, stop_event: threading.Event) -> threading.Thread:
+        """
+        Start a background thread that sets stop_event when the user presses q or Ctrl+C.
+
+        Intended for nav commands that manage their own motor steering — they cannot
+        use _start_teleop_thread (which would fight the algorithm), but still need a
+        way to stop cleanly from the keyboard without Ctrl+C.
+        """
+        import os
+        import select
+        import sys
+        import termios
+        import tty
+
+        def _listen() -> None:
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while not stop_event.is_set():
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    if not ready:
+                        continue
+                    chunk = os.read(fd, 3)
+                    if chunk in (b"q", b"Q", b"\x03"):
+                        stop_event.set()
+                        break
+            except Exception:  # pylint: disable=broad-except
+                pass
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        t = threading.Thread(target=_listen, daemon=True, name="quit-listener")
+        t.start()
+        return t
+
     def _start_teleop_thread(
         self, stop_event: threading.Event, speed: float = 0.3, turn_gain: float = 0.5
     ) -> threading.Thread:
