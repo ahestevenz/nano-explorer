@@ -182,8 +182,6 @@ nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
 ```
 
-### Machine Learning (Experimental)
-
 ---
 
 ## Data Pipeline Tools
