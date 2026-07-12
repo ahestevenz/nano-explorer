@@ -15,21 +15,22 @@ requires-python = ">=3.6"
 #   trt_pose             build from: github.com/NVIDIA-AI-IOT/trt_pose
 #   torch2trt            build from: github.com/NVIDIA-AI-IOT/torch2trt
 #   Adafruit-PCA9685, adafruit-circuitpython-*, Jetson.GPIO   hardware-specific
+#   pycuda, pycocotools, pupil-apriltags  — Jetson/CUDA-specific, see requirements.txt
+#
+# Version pins for the Jetson (Python 3.6, aarch64) live in requirements.txt.
+# This file uses flexible constraints so CI and dev machines can resolve modern wheels.
 dependencies = [
-    "PyYAML==5.4.1",
-    "numpy==1.19.5",           # last version with pre-built aarch64 wheel for py36
-    "Pillow==8.4.0",           # last py36-compatible Pillow
-    "loguru==0.5.3",           # last py36 version
-    "colorama==0.4.4",
-    "pynput==1.7.6",
-    "aiohttp==3.7.4",          # last py36-compatible aiohttp
-    "aiohttp-cors==0.7.0",
-    "tqdm==4.64.1",
-    "pupil-apriltags==1.0.4.post6",
-    "pydantic==1.9.2",         # last version supporting Python 3.6
-    "click==7.1.2",
-    "pycocotools==2.0.4",
-    "pycuda==2021.1",
+    "PyYAML",
+    "numpy",
+    "Pillow",
+    "loguru",
+    "colorama",
+    "pynput",
+    "aiohttp",
+    "aiohttp-cors",
+    "tqdm",
+    "pydantic>=1.9,<2.0",      # v2 renames @validator → @field_validator; keep v1 API
+    "click",
 ]
 
 [project.optional-dependencies]
