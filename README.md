@@ -129,6 +129,59 @@ nano-explorer vision gesture --no-stream
 
 ### Navigation & Mapping (Experimental)
 
+Stream is **on by default** for all commands. Arrow keys drive the robot while the command runs; press `q` to stop.
+
+#### Navigation
+
+```bash
+# Colour-line following (classical HSV threshold)
+nano-explorer nav line-follow
+nano-explorer nav line-follow --config YAML            # config (default: config/models/line_follow.yaml)
+nano-explorer nav line-follow --speed SPEED            # forward speed 0.0-1.0 (default: 0.3)
+nano-explorer nav line-follow --turn-gain GAIN         # differential turn gain 0.0-1.0 (default: 0.5)
+nano-explorer nav line-follow --stream-port PORT
+nano-explorer nav line-follow --no-stream
+
+# Road following via regression CNN (steering angle output)
+nano-explorer nav road-follow
+nano-explorer nav road-follow --model PATH             # trained .pth or .engine model
+nano-explorer nav road-follow --speed SPEED
+nano-explorer nav road-follow --turn-gain GAIN
+nano-explorer nav road-follow --stream-port PORT
+nano-explorer nav road-follow --no-stream
+
+# AprilTag / ArUco fiducial marker navigation
+nano-explorer nav apriltag
+nano-explorer nav apriltag --config YAML               # config (default: config/models/apriltag.yaml)
+nano-explorer nav apriltag --speed SPEED
+nano-explorer nav apriltag --turn-gain GAIN
+nano-explorer nav apriltag --stream-port PORT
+nano-explorer nav apriltag --no-stream
+```
+
+#### Mapping
+
+> Requires ORB-SLAM2 Python bindings — see [doc/jetbot-setup.md](doc/jetbot-setup.md).
+
+```bash
+# Monocular visual odometry (ORB / SIFT / AKAZE feature tracking)
+nano-explorer map odometry
+nano-explorer map odometry --config YAML               # config (default: config/models/odometry.yaml)
+nano-explorer map odometry --speed SPEED               # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (default: 0.5)
+nano-explorer map odometry --stream-port PORT
+nano-explorer map odometry --no-stream
+
+# Monocular SLAM — ORB-SLAM2 backend
+# Stream shows a live top-down trajectory map with camera picture-in-picture
+nano-explorer map slam
+nano-explorer map slam --config YAML                   # config (default: config/models/slam.yaml)
+nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
+nano-explorer map slam --stream-port PORT
+nano-explorer map slam --no-stream
+```
+
 ### Machine Learning (Experimental)
 
 ---
