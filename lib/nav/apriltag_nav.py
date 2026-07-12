@@ -123,9 +123,6 @@ class AprilTagNavigator(CameraMotionMixIn):
         return nearest["center"]
 
     def run(self) -> None:
-        import signal
-
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._load()
 
         self._motors.open()

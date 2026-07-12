@@ -190,9 +190,6 @@ class LineFollower(CameraMotionMixIn):
         self._motors.steer(self._config.speed, _KP * error * self._config.turn_gain)
 
     def run(self) -> None:
-        import signal
-
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._load()
 
         self._motors.open()

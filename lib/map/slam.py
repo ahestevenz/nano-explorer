@@ -118,10 +118,8 @@ class SlamMapper(CameraMotionMixIn):
             return []
 
     def run(self) -> None:
-        import signal
         import time
 
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._load()
 
         _stop = threading.Event()

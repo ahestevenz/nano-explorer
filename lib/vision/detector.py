@@ -98,9 +98,6 @@ class ObjectDetector(CameraMotionMixIn):
         os.environ.setdefault("GLOG_minloglevel", "3")  # suppress glog
         os.environ.setdefault("TRT_LOGGER_VERBOSITY", "0")  # suppress TRT
 
-        # Restore default SIGINT so Ctrl+C works even during TRT model loading
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-
         with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
@@ -114,7 +111,11 @@ class ObjectDetector(CameraMotionMixIn):
                 raise RuntimeError(
                     "jetson.inference not found. It ships with JetPack — check your installation."
                 ) from e
+            # SIG_DFL during TRT load only — lets Ctrl+C kill a hung model init
+            # immediately. Restored to Python's handler once loading completes.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
             self._net = ji.detectNet(cfg["model"], threshold=self._threshold)
+            signal.signal(signal.SIGINT, signal.default_int_handler)
             self._detect_fn = self._detect_jetsoni
             logger.success(f"Loaded {ObjectDetectorBackend.JETSON_INFERENCE} model: {cfg['model']}")
 
@@ -183,11 +184,6 @@ class ObjectDetector(CameraMotionMixIn):
         return results
 
     def run(self) -> None:
-        import signal
-
-        # Ensure Ctrl+C is always catchable
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-
         cam = self._open_camera()
         _stop = threading.Event()
 

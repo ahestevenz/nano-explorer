@@ -160,9 +160,6 @@ class VisualOdometry(CameraMotionMixIn):
         return transform
 
     def run(self) -> None:
-        import signal
-
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._load()
 
         _stop = threading.Event()

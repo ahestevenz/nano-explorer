@@ -116,9 +116,6 @@ class RoadFollower(CameraMotionMixIn):
             return float(self._model(inp).squeeze().clamp(-1.0, 1.0))
 
     def run(self) -> None:
-        import signal
-
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
         self._load_model()
 
         self._motors.open()
