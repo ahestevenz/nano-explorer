@@ -39,6 +39,7 @@ dev = [
     "pytest-cov==2.12.1",
     "flake8==3.9.2",
     "flake8-bugbear==21.9.2",
+    "opencv-python-headless",  # cv2 for dev/test — on Jetson use JetPack-bundled cv2
 ]
 
 [tool.ruff]
@@ -136,6 +137,7 @@ disable = [
     "W0107",  # unnecessary-pass
     "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
     "E0611",  # no-name-in-module
+    "R0801",  # duplicate-code — mixin subclasses share intentional run() boilerplate
 ]
 
 [tool.pylint.format]

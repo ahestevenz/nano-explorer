@@ -61,8 +61,7 @@ class AprilTagNavConfig(BaseModel):
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(
-                f"AprilTag config not found: {v}\n"
-                "Expected at: config/models/apriltag.yaml"
+                f"AprilTag config not found: {v}\n" "Expected at: config/models/apriltag.yaml"
             )
         return v
 
@@ -81,8 +80,8 @@ class AprilTagNavigator(CameraMotionMixIn):
         self._detector = None
 
     def _load(self) -> None:
-        import yaml
         import pupil_apriltags  # pylint: disable=import-error
+        import yaml
 
         with open(self._config.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)

@@ -12,6 +12,7 @@ YAML fields (config/models/slam.yaml):
 All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
 
+import contextlib
 import threading
 from pathlib import Path
 from typing import Any
@@ -51,10 +52,7 @@ class SlamConfig(BaseModel):
     @validator("config_path")
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
-            raise ValueError(
-                f"SLAM config not found: {v}\n"
-                "Expected at: config/models/slam.yaml"
-            )
+            raise ValueError(f"SLAM config not found: {v}\n" "Expected at: config/models/slam.yaml")
         return v
 
 
@@ -137,10 +135,7 @@ class SlamMapper(CameraMotionMixIn):
             speed=self._config.speed,
             turn_gain=self._config.turn_gain,
         )
-        logger.info(
-            f"SLAM running — backend={self._backend}  "
-            "(arrow keys to drive, q to stop)"
-        )
+        logger.info(f"SLAM running — backend={self._backend}  " "(arrow keys to drive, q to stop)")
 
         try:
             while not _stop.is_set():
@@ -156,7 +151,9 @@ class SlamMapper(CameraMotionMixIn):
                     h, w = frame.shape[:2]
                     scale = 2
                     self._push_frame(
-                        self._render_map_view(traj, frame, label, self._backend, w * scale, h * scale)
+                        self._render_map_view(
+                            traj, frame, label, self._backend, w * scale, h * scale
+                        )
                     )
 
         except KeyboardInterrupt:
@@ -164,15 +161,22 @@ class SlamMapper(CameraMotionMixIn):
         finally:
             _stop.set()
             if self._slam is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._slam.shutdown()
-                except Exception:  # pylint: disable=broad-except
-                    pass
             self._close_camera(cam)
             logger.info("SLAM stopped.")
 
     @staticmethod
-    def _render_map_view(
+    def _annotate_frame(
+        cam_frame: np.ndarray,
+        state_label: str,
+        backend: str,
+    ) -> np.ndarray:
+        h, w = cam_frame.shape[:2]
+        return SlamMapper._render_map_view([], cam_frame, state_label, backend, w, h)
+
+    @staticmethod
+    def _render_map_view(  # pylint: disable=too-many-positional-arguments
         traj: list,
         cam_frame: np.ndarray,
         state_label: str,
@@ -211,12 +215,24 @@ class SlamMapper(CameraMotionMixIn):
 
         color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
         cv2.putText(
-            canvas, f"[{backend}] {state_label}",
-            (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA,
+            canvas,
+            f"[{backend}] {state_label}",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
         )
         cv2.putText(
-            canvas, "TOP-DOWN MAP",
-            (10, canvas_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1, cv2.LINE_AA,
+            canvas,
+            "TOP-DOWN MAP",
+            (10, canvas_h - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (100, 100, 100),
+            1,
+            cv2.LINE_AA,
         )
 
         # Camera PiP — top-right corner, 1/5 of canvas height

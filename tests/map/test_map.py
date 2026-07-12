@@ -170,9 +170,7 @@ class TestOdometryConfig:
     def test_valid_config_loads(self):
         from lib.map.odometry import OdometryConfig
 
-        cfg = OdometryConfig(
-            config_path=str(PROJECT_ROOT_PATH / "config/models/odometry.yaml")
-        )
+        cfg = OdometryConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/odometry.yaml"))
         assert cfg.stream is False
 
     def test_missing_config_raises(self, tmp_path):
@@ -202,8 +200,6 @@ class TestVisualOdometry:
         assert np.allclose(vo._pose, np.eye(4))
 
     def test_init_detector_orb(self):
-        import cv2
-
         from lib.map.odometry import OdometryConfig, VisualOdometry
 
         vo = VisualOdometry(
@@ -236,7 +232,7 @@ class TestVisualOdometry:
         )
         # With None descriptors, match_features should return empty list
         result = vo._match_features(None, None)
-        assert result == []
+        assert not result
 
     def test_estimate_motion_returns_none_with_too_few_matches(self):
         from lib.map.odometry import OdometryConfig, VisualOdometry

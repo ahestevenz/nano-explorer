@@ -60,8 +60,7 @@ class OdometryConfig(BaseModel):
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(
-                f"Odometry config not found: {v}\n"
-                "Expected at: config/models/odometry.yaml"
+                f"Odometry config not found: {v}\n" "Expected at: config/models/odometry.yaml"
             )
         return v
 
@@ -111,15 +110,11 @@ class VisualOdometry(CameraMotionMixIn):
         self._init_detector(detector_type, self._max_features)
         logger.success(f"Visual odometry ready — detector={detector_type}")
 
-    def _find_keypoints(
-        self, gray: np.ndarray
-    ) -> Tuple[List[cv2.KeyPoint], Optional[np.ndarray]]:
+    def _find_keypoints(self, gray: np.ndarray) -> Tuple[List[cv2.KeyPoint], Optional[np.ndarray]]:
         kps, desc = self._detector.detectAndCompute(gray, None)
         return list(kps), desc
 
-    def _match_features(
-        self, desc1: np.ndarray, desc2: np.ndarray
-    ) -> List[cv2.DMatch]:
+    def _match_features(self, desc1: np.ndarray, desc2: np.ndarray) -> List[cv2.DMatch]:
         if desc1 is None or desc2 is None:
             return []
         raw = self._matcher.knnMatch(desc1, desc2, k=2)
@@ -146,21 +141,23 @@ class VisualOdometry(CameraMotionMixIn):
         # Approximate focal length from image width (no calibration)
         f = w
         cx, cy = w / 2.0, h / 2.0
-        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
+        k_mat = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
 
         pts1 = np.float32([kps1[m.queryIdx].pt for m in matches])
         pts2 = np.float32([kps2[m.trainIdx].pt for m in matches])
 
-        E, mask = cv2.findEssentialMat(pts1, pts2, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
-        if E is None:
+        e_mat, mask = cv2.findEssentialMat(
+            pts1, pts2, k_mat, method=cv2.RANSAC, prob=0.999, threshold=1.0
+        )
+        if e_mat is None:
             return None
 
-        _, R, t, _ = cv2.recoverPose(E, pts1, pts2, K, mask=mask)
+        _, r_mat, t, _ = cv2.recoverPose(e_mat, pts1, pts2, k_mat, mask=mask)
 
-        T = np.eye(4, dtype=np.float64)
-        T[:3, :3] = R
-        T[:3, 3] = t.ravel()
-        return T
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = r_mat
+        transform[:3, 3] = t.ravel()
+        return transform
 
     def run(self) -> None:
         import signal
@@ -188,27 +185,24 @@ class VisualOdometry(CameraMotionMixIn):
 
                 kps, desc = self._find_keypoints(gray)
                 matches: List[cv2.DMatch] = []
-                delta_T: Optional[np.ndarray] = None
+                delta_t: Optional[np.ndarray] = None
 
                 if self._prev_gray is not None and self._prev_desc is not None:
                     matches = self._match_features(self._prev_desc, desc)
-                    delta_T = self._estimate_motion(
-                        self._prev_kps, kps, matches, gray.shape
-                    )
-                    if delta_T is not None:
-                        self._pose = self._pose @ delta_T
+                    delta_t = self._estimate_motion(self._prev_kps, kps, matches, gray.shape)
+                    if delta_t is not None:
+                        self._pose = self._pose @ delta_t
                         t = self._pose[:3, 3]
-                        logger.debug(f"pos=({t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f})  "
-                                     f"matches={len(matches)}")
+                        logger.debug(
+                            f"pos=({t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f})  " f"matches={len(matches)}"
+                        )
 
                 self._prev_gray = gray
                 self._prev_kps = kps
                 self._prev_desc = desc
 
                 if self._config.stream and self._server is not None:
-                    self._push_frame(
-                        self._annotate_frame(frame, kps, matches, self._pose)
-                    )
+                    self._push_frame(self._annotate_frame(frame, kps, matches, self._pose))
 
         except KeyboardInterrupt:
             pass
@@ -216,7 +210,6 @@ class VisualOdometry(CameraMotionMixIn):
             _stop.set()
             self._close_camera(cam)
             logger.info("Visual odometry stopped.")
-
 
     @staticmethod
     def _annotate_frame(

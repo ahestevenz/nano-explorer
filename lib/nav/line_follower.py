@@ -35,7 +35,6 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-from lib.camera import Camera
 from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.motor import MotorController
 from lib.settings import PROJECT_ROOT_PATH
@@ -49,7 +48,7 @@ _LINE_COLOR_RANGES = {
 
 _VALID_LINE_COLORS = list(_LINE_COLOR_RANGES.keys())
 _VALID_MODES = ["classical", "cnn"]
-_KP = 0.5       # proportional steering gain
+_KP = 0.5  # proportional steering gain
 _SEARCH_SPEED = 0.15
 
 
@@ -75,8 +74,7 @@ class LineFollowerConfig(BaseModel):
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
         if not Path(v).exists():
             raise ValueError(
-                f"Line follow config not found: {v}\n"
-                "Expected at: config/models/line_follow.yaml"
+                f"Line follow config not found: {v}\n" "Expected at: config/models/line_follow.yaml"
             )
         return v
 
@@ -148,7 +146,7 @@ class LineFollower(CameraMotionMixIn):
         self, frame: np.ndarray
     ) -> Tuple[Optional[Tuple[int, int]], np.ndarray]:
         """Return ((cx, cy), mask) of the largest line blob in the bottom third, or (None, mask)."""
-        h = frame.s1hape[0]
+        h = frame.shape[0]
         roi = frame[h * 2 // 3 :, :]  # bottom third only
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -240,7 +238,7 @@ class LineFollower(CameraMotionMixIn):
     def _annotate_frame(
         frame: np.ndarray,
         centroid: Optional[Tuple[int, int]],
-        mask: Optional[np.ndarray] = None,
+        _mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         out = frame.copy()
         h, w = out.shape[:2]
