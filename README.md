@@ -129,7 +129,173 @@ nano-explorer vision gesture --no-stream
 
 ### Navigation & Mapping (Experimental)
 
-### Machine Learning (Experimental)
+Stream is **on by default** for all commands. Arrow keys drive the robot while the command runs; press `q` to stop.
+
+#### Navigation
+
+```bash
+# Colour-line following (classical HSV threshold)
+nano-explorer nav line-follow
+nano-explorer nav line-follow --config YAML            # config (default: config/models/line_follow.yaml)
+nano-explorer nav line-follow --speed SPEED            # forward speed 0.0-1.0 (default: 0.3)
+nano-explorer nav line-follow --turn-gain GAIN         # differential turn gain 0.0-1.0 (default: 0.5)
+nano-explorer nav line-follow --stream-port PORT
+nano-explorer nav line-follow --no-stream
+
+# Road following via regression CNN (steering angle output)
+nano-explorer nav road-follow
+nano-explorer nav road-follow --model PATH             # trained .pth or .engine model
+nano-explorer nav road-follow --speed SPEED
+nano-explorer nav road-follow --turn-gain GAIN
+nano-explorer nav road-follow --stream-port PORT
+nano-explorer nav road-follow --no-stream
+
+# AprilTag / ArUco fiducial marker navigation
+nano-explorer nav apriltag
+nano-explorer nav apriltag --config YAML               # config (default: config/models/apriltag.yaml)
+nano-explorer nav apriltag --speed SPEED
+nano-explorer nav apriltag --turn-gain GAIN
+nano-explorer nav apriltag --stream-port PORT
+nano-explorer nav apriltag --no-stream
+```
+
+#### Mapping
+
+> Requires ORB-SLAM2 Python bindings — see [doc/jetbot-setup.md](doc/jetbot-setup.md).
+
+```bash
+# Monocular visual odometry (ORB / SIFT / AKAZE feature tracking)
+nano-explorer map odometry
+nano-explorer map odometry --config YAML               # config (default: config/models/odometry.yaml)
+nano-explorer map odometry --speed SPEED               # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (default: 0.5)
+nano-explorer map odometry --stream-port PORT
+nano-explorer map odometry --no-stream
+
+# Monocular SLAM — ORB-SLAM2 backend
+# Stream shows a live top-down trajectory map with camera picture-in-picture
+nano-explorer map slam
+nano-explorer map slam --config YAML                   # config (default: config/models/slam.yaml)
+nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
+nano-explorer map slam --stream-port PORT
+nano-explorer map slam --no-stream
+```
+
+---
+
+## Data Pipeline Tools
+
+Scripts in `tools/` run **on your laptop** (or any machine with PyTorch + torchvision installed) to collect training data and train models that are then copied to the Nano.
+
+### Collect collision-avoidance data
+
+Drive the robot into position, then snapshot frames labelled **free** or **blocked**.
+
+```bash
+python tools/collect_collision_data.py --out datasets/collision_001
+
+# Options
+#   --speed      Motor speed [0, 1]          (default: 0.25)
+#   --turn-gain  Turn speed multiplier [0,1] (default: 0.60)
+#   --camera     csi | usb                   (default: csi)
+```
+
+**Key bindings while running:**
+
+| Key | Action |
+|-----|--------|
+| `↑ ↓ ← →` | Drive the robot |
+| `f` | Capture frame → `free/` |
+| `b` | Capture frame → `blocked/` |
+| `q` / Ctrl-C | Quit |
+
+Output layout:
+```
+datasets/collision_001/
+  free/
+    img_000001.jpg …
+  blocked/
+    img_000001.jpg …
+```
+
+Resuming is automatic — re-running the same `--out` path picks up where you left off.
+
+---
+
+### Train the collision-avoidance model
+
+```bash
+python tools/train_collision_avoidance.py --dataset datasets/collision_001
+
+# Options
+#   --output     Output .pth path  (default: assets/models/collision_avoidance.pth)
+#   --epochs     Training epochs   (default: 15)
+#   --lr         Learning rate     (default: 1e-4)
+#   --batch-size Mini-batch size   (default: 32)
+#   --val-split  Validation ratio  (default: 0.15)
+#   --seed       Random seed       (default: 42)
+```
+
+Trains a **ResNet18 binary classifier** (`free=0`, `blocked=1`).
+Best checkpoint (highest val accuracy) is saved automatically.
+The saved weights are loaded by `nano-explorer nav collision-avoid`.
+
+---
+
+### Collect road-following data
+
+Drive the robot along the track while frames are captured at a fixed rate and labelled with the current steering angle.
+
+```bash
+python tools/collect_road_data.py --out datasets/road_001
+
+# Options
+#   --speed      Motor speed [0, 1]          (default: 0.25)
+#   --turn-gain  Turn speed multiplier [0,1] (default: 0.60)
+#   --fps        Frame capture rate (Hz)     (default: 10)
+#   --camera     csi | usb                   (default: csi)
+```
+
+**Key bindings while running:**
+
+| Key | Steering angle saved |
+|-----|---------------------|
+| `↑` | `0.0` (straight) |
+| `←` | `-1.0` (full left) |
+| `→` | `+1.0` (full right) |
+| `q` / Ctrl-C | Quit |
+
+Frames are only written while a key is **held** (robot moving). Reverse (`↓`) is ignored.
+
+Output layout:
+```
+datasets/road_001/
+  labels.csv        # filename,angle
+  img_000001.jpg …
+```
+
+Appends to an existing `labels.csv` so sessions can be resumed.
+
+---
+
+### Train the road-following model
+
+```bash
+python tools/train_road_follower.py --dataset datasets/road_001
+
+# Options
+#   --output     Output .pth path  (default: assets/models/road_follower.pth)
+#   --epochs     Training epochs   (default: 20)
+#   --lr         Learning rate     (default: 1e-4)
+#   --batch-size Mini-batch size   (default: 32)
+#   --val-split  Validation ratio  (default: 0.15)
+#   --seed       Random seed       (default: 42)
+```
+
+Trains a **ResNet18 regression model** (single output: steering angle ∈ [-1, 1]).
+Best checkpoint (lowest val MSE loss) is saved automatically.
+The saved weights are loaded by `nano-explorer nav road-follow`.
 
 ---
 
@@ -156,7 +322,27 @@ python3 -m pytest tests/vision/ -v
 
 ## Development
 
-These tools run on your **laptop/desktop** — not on the Nano itself.
+### Environment disclaimer
+
+The development and production environments are intentionally different due to the constraints of the Jetson Nano hardware.
+
+| | Development (laptop/CI) | Production (Jetson Nano) |
+|---|---|---|
+| Python | 3.8 + | 3.6 (JetPack 4.6.1) |
+| PyTorch | Latest pip wheel | 1.10.0 NVIDIA aarch64 wheel |
+| OpenCV | `opencv-python-headless` (pip) | 4.1.1 bundled with JetPack |
+| CUDA / TensorRT | Not available | CUDA 10.2, TensorRT 8.2 |
+| Hardware libs | Mocked / absent | `Jetson.GPIO`, `adafruit-*`, etc. |
+
+Hardware-specific packages (`orbslam2`, `pycuda`, `pupil-apriltags`, `trt_pose`, `torch2trt`, `Adafruit-PCA9685`, `Jetson.GPIO`) cannot be installed on a standard x86 machine and are **not** listed as pip dependencies. See [`doc/jetbot-setup.md`](doc/jetbot-setup.md) for Nano-side installation instructions.
+
+#### Test suite scope
+
+The test suite is designed to verify **internal logic** (frame processing, config validation, algorithm correctness, motor command calculations) rather than hardware integration. Hardware modules are replaced with `MagicMock` stubs at import time when the real packages are unavailable, so the same test suite runs unchanged both locally and in CI.
+
+CI passes on every push and pull request to confirm that the core logic is sound. It does **not** guarantee that the code will behave identically on the Nano — differences in library versions, camera drivers, and CUDA behaviour mean that **on-device testing remains essential** before any deployment.
+
+---
 
 ### Setup
 

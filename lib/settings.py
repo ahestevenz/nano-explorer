@@ -21,5 +21,14 @@ class NanoSettings(BaseSettings):  # pylint: disable = no-name-in-module
     segmentation_config_path: Path = PROJECT_ROOT_PATH / "config/models/segmentation.yaml"
     pose_config_path: Path = PROJECT_ROOT_PATH / "config/models/pose.yaml"
 
+    # Navigation
+    line_follow_config_path: Path = PROJECT_ROOT_PATH / "config/models/line_follow.yaml"
+    road_follow_model_path: Path = PROJECT_ROOT_PATH / "assets/models/road_follower.pth"
+    apriltag_config_path: Path = PROJECT_ROOT_PATH / "config/models/apriltag.yaml"
+
+    # Mapping
+    odometry_config_path: Path = PROJECT_ROOT_PATH / "config/models/odometry.yaml"
+    slam_config_path: Path = PROJECT_ROOT_PATH / "config/models/slam.yaml"
+
     class Config:
         env_prefix = "NANO_"

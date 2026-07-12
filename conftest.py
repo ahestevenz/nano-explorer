@@ -20,5 +20,8 @@ for mod in [
     "jetbot",
     "torch2trt",
     "apriltag",
+    "orbslam2",
+    "rtabmap",
+    "rtabmap.util",
 ]:
     sys.modules.setdefault(mod, MagicMock())

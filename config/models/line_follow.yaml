@@ -1,0 +1,14 @@
+# Line follower configuration
+# mode: classical (HSV centroid on bottom half) | cnn (regression model)
+mode: classical
+
+# Classical mode — target line colour in HSV space
+# Supported: white, black, yellow
+line_color: white
+
+# Minimum contour area in pixels to treat as a valid line
+min_area: 500
+
+# CNN mode — path to a trained PyTorch regression model (.pth or .engine)
+# Uncomment and set when mode: cnn
+# model: assets/models/line_follower.pth

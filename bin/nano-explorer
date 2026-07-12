@@ -4,9 +4,9 @@ nano-explorer -- Modular CLI for the Waveshare JetBot / Jetson Nano B01.
 
 Usage:
   nano-explorer motion    <command> [options]
-  nano-explorer vision   <command> [options]
-  nano-explorer nav      <command> [options]
-  nano-explorer ml       <command> [options]
+  nano-explorer vision    <command> [options]
+  nano-explorer nav       <command> [options]
+  nano-explorer map       <command> [options]
   nano-explorer --help
   nano-explorer --version
 """
@@ -82,23 +82,23 @@ def build_parser(settings: NanoSettings):
     )
     register_vision(vision_parser, settings)
 
-    # Navigation & mapping
-    from commands.cmd_navigation import register as register_nav  # pylint: disable=E0611, E0401
+    # Navigation
+    from commands.navigation import register as register_nav  # pylint: disable=E0611, E0401
 
     nav_parser = subparsers.add_parser(
         "nav",
-        help="[Experimental] Line/road following, SLAM, AprilTag navigation",
+        help="Line/road following and AprilTag navigation",
     )
-    register_nav(nav_parser)
+    register_nav(nav_parser, settings)
 
-    # Machine learning
-    from commands.cmd_ml import register as register_ml  # pylint: disable=E0611, E0401
+    # Mapping
+    from commands.mapping import register as register_map  # pylint: disable=E0611, E0401
 
-    ml_parser = subparsers.add_parser(
-        "ml",
-        help="[Experimental] Behaviour cloning -- record, train, deploy",
+    map_parser = subparsers.add_parser(
+        "map",
+        help="[Experimental] Visual odometry and monocular SLAM",
     )
-    register_ml(ml_parser)
+    register_map(map_parser, settings)
 
     return parser
 

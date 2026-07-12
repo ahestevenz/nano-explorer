@@ -1,3 +1,48 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nano-explorer"
+version = "0.1.0"
+description = "Modular CLI toolkit for the Waveshare JetBot / Jetson Nano B01"
+requires-python = ">=3.6"
+# Packages that CANNOT be installed via pip on Jetson Nano — see doc/jetbot-setup.md:
+#   torch==1.8.0         NVIDIA aarch64 wheel (nvidia.box.com)
+#   torchvision==0.9.0   build from source
+#   cv2                  bundled with JetPack 4.6.1
+#   orbslam2             build from: github.com/muskie82/MonoSLAM
+#   trt_pose             build from: github.com/NVIDIA-AI-IOT/trt_pose
+#   torch2trt            build from: github.com/NVIDIA-AI-IOT/torch2trt
+#   Adafruit-PCA9685, adafruit-circuitpython-*, Jetson.GPIO   hardware-specific
+#   pycuda, pycocotools, pupil-apriltags  — Jetson/CUDA-specific, see requirements.txt
+#
+# Version pins for the Jetson (Python 3.6, aarch64) live in requirements.txt.
+# This file uses flexible constraints so CI and dev machines can resolve modern wheels.
+dependencies = [
+    "PyYAML",
+    "numpy",
+    "Pillow",
+    "loguru",
+    "colorama",
+    "pynput",
+    "aiohttp",
+    "aiohttp-cors",
+    "tqdm",
+    "pydantic>=1.9,<2.0",      # v2 renames @validator → @field_validator; keep v1 API
+    "click",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==6.2.5",           # last version supporting py36
+    "pytest-mock==3.6.1",
+    "pytest-cov==2.12.1",
+    "flake8==3.9.2",
+    "flake8-bugbear==21.9.2",
+    "opencv-python-headless",  # cv2 for dev/test — on Jetson use JetPack-bundled cv2
+]
+
 [tool.ruff]
 # Target Python 3.6 (JetPack 4.6.1 / Jetson Nano B01)
 target-version = "py37"
@@ -88,11 +133,13 @@ disable = [
     "R0903",  # too-few-public-methods
     "R0913",  # too-many-arguments
     "R0914",  # too-many-locals
+    "R0917",  # too-many-positional-arguments
     "W0212",  # protected-access
     "W0703",  # broad-except
     "W0107",  # unnecessary-pass
     "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
     "E0611",  # no-name-in-module
+    "R0801",  # duplicate-code — mixin subclasses share intentional run() boilerplate
 ]
 
 [tool.pylint.format]
@@ -118,7 +165,8 @@ ignored-modules = [
     "jetbot", "jetson", "board", "busio",
     "adafruit_pca9685", "adafruit_motor",
     "cv2", "torch", "torchvision", "trt_pose", "torch2trt",
-    "pynput", "apriltag", "colorama", "aiohttp",
+    "pynput", "pupil_apriltags", "colorama", "aiohttp",
+    "orbslam2", "rtabmap",
 ]
 ignored-classes = ["jetbot.Robot"]
 
