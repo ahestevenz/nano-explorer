@@ -322,7 +322,27 @@ python3 -m pytest tests/vision/ -v
 
 ## Development
 
-These tools run on your **laptop/desktop** — not on the Nano itself.
+### Environment disclaimer
+
+The development and production environments are intentionally different due to the constraints of the Jetson Nano hardware.
+
+| | Development (laptop/CI) | Production (Jetson Nano) |
+|---|---|---|
+| Python | 3.8 + | 3.6 (JetPack 4.6.1) |
+| PyTorch | Latest pip wheel | 1.10.0 NVIDIA aarch64 wheel |
+| OpenCV | `opencv-python-headless` (pip) | 4.1.1 bundled with JetPack |
+| CUDA / TensorRT | Not available | CUDA 10.2, TensorRT 8.2 |
+| Hardware libs | Mocked / absent | `Jetson.GPIO`, `adafruit-*`, etc. |
+
+Hardware-specific packages (`orbslam2`, `pycuda`, `pupil-apriltags`, `trt_pose`, `torch2trt`, `Adafruit-PCA9685`, `Jetson.GPIO`) cannot be installed on a standard x86 machine and are **not** listed as pip dependencies. See [`doc/jetbot-setup.md`](doc/jetbot-setup.md) for Nano-side installation instructions.
+
+#### Test suite scope
+
+The test suite is designed to verify **internal logic** (frame processing, config validation, algorithm correctness, motor command calculations) rather than hardware integration. Hardware modules are replaced with `MagicMock` stubs at import time when the real packages are unavailable, so the same test suite runs unchanged both locally and in CI.
+
+CI passes on every push and pull request to confirm that the core logic is sound. It does **not** guarantee that the code will behave identically on the Nano — differences in library versions, camera drivers, and CUDA behaviour mean that **on-device testing remains essential** before any deployment.
+
+---
 
 ### Setup
 
