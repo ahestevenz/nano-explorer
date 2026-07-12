@@ -133,6 +133,7 @@ disable = [
     "R0903",  # too-few-public-methods
     "R0913",  # too-many-arguments
     "R0914",  # too-many-locals
+    "R0917",  # too-many-positional-arguments
     "W0212",  # protected-access
     "W0703",  # broad-except
     "W0107",  # unnecessary-pass
