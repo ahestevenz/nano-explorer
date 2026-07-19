@@ -196,9 +196,14 @@ Drive the robot into position, then snapshot frames labelled **free** or **block
 python tools/collect_collision_data.py --out datasets/collision_001
 
 # Options
-#   --speed      Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain  Turn speed multiplier [0,1] (default: 0.60)
-#   --camera     csi | usb                   (default: csi)
+#   --speed        Motor speed [0, 1]          (default: 0.25)
+#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
+#   --camera       csi | usb                   (default: csi)
+#   --stream       Enable MJPEG stream         (default: off)
+#   --stream-port  MJPEG server port           (default: 8080)
+
+# With live preview in browser
+python tools/collect_collision_data.py --out datasets/collision_001 --stream
 ```
 
 **Key bindings while running:**
@@ -251,10 +256,15 @@ Drive the robot along the track while frames are captured at a fixed rate and la
 python tools/collect_road_data.py --out datasets/road_001
 
 # Options
-#   --speed      Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain  Turn speed multiplier [0,1] (default: 0.60)
-#   --fps        Frame capture rate (Hz)     (default: 10)
-#   --camera     csi | usb                   (default: csi)
+#   --speed        Motor speed [0, 1]          (default: 0.25)
+#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
+#   --fps          Frame capture rate (Hz)     (default: 10)
+#   --camera       csi | usb                   (default: csi)
+#   --stream       Enable MJPEG stream         (default: off)
+#   --stream-port  MJPEG server port           (default: 8080)
+
+# With live preview in browser
+python tools/collect_road_data.py --out datasets/road_001 --stream
 ```
 
 **Key bindings while running:**
