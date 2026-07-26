@@ -97,7 +97,12 @@ class CollisionConfig(BaseModel):
     @validator("model_path")
     def model_path_must_exist(cls, v, values):  # pylint: disable=no-self-argument
         path = Path(v).expanduser()
-        if not path.exists():
+        is_default = path == Path(DEFAULT_COLLISION_MODEL_PATH)
+
+        # Only auto-download for the untouched default path. If the caller set
+        # model_path explicitly (--model, env var, config file), a typo'd or
+        # wrong path should raise, not silently fetch an unrelated file there.
+        if not path.exists() and is_default:
             path = _download_from_hub(
                 dest=path,
                 repo_id=values.get("hf_repo_id", DEFAULT_COLLISION_MODEL_HF_REPO_ID),
@@ -105,9 +110,14 @@ class CollisionConfig(BaseModel):
                 revision=values.get("hf_revision", DEFAULT_COLLISION_MODEL_HF_REVISION),
             )
         if not path.exists():
-            if path == Path(DEFAULT_COLLISION_MODEL_PATH):
+            if is_default:
                 source = (
-                    "This is the default (NanoSettings.collision_model_path, see lib/settings.py)."
+                    "This is the default (NanoSettings.collision_model_path, see lib/settings.py). "
+                    "Also tried downloading "
+                    f"{values.get('hf_repo_id', DEFAULT_COLLISION_MODEL_HF_REPO_ID)}"
+                    f"/{values.get('hf_filename', DEFAULT_COLLISION_MODEL_HF_FILENAME)}"
+                    f"@{values.get('hf_revision', DEFAULT_COLLISION_MODEL_HF_REVISION)} "
+                    "from Hugging Face — see the warning above for why that failed."
                 )
             else:
                 source = (
@@ -117,11 +127,6 @@ class CollisionConfig(BaseModel):
             raise ValueError(
                 f"Collision model not found: {path.resolve()}\n"
                 f"{source}\n"
-                "Also tried downloading "
-                f"{values.get('hf_repo_id', DEFAULT_COLLISION_MODEL_HF_REPO_ID)}"
-                f"/{values.get('hf_filename', DEFAULT_COLLISION_MODEL_HF_FILENAME)}"
-                f"@{values.get('hf_revision', DEFAULT_COLLISION_MODEL_HF_REVISION)} "
-                "from Hugging Face — see the warning above for why that failed.\n"
                 "\n"
                 "Fix it one of these ways:\n"
                 "  1. Train a model:  python tools/train_collision_avoidance.py "

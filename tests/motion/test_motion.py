@@ -348,3 +348,33 @@ class TestCollisionModelPath:
 
         with pytest.raises(ValueError, match="model not found"):
             CollisionConfig(model_path="assets/models/does_not_exist.pth")
+
+    def test_non_default_missing_path_does_not_trigger_download(self):
+        from lib.motion.collision import CollisionConfig
+
+        with patch("lib.motion.collision._download_from_hub") as mock_download, pytest.raises(
+            ValueError, match="model not found"
+        ):
+            CollisionConfig(model_path="/nonexistent/model.pth")
+        mock_download.assert_not_called()
+
+    def test_default_missing_path_downloads_from_hub(self):
+        import lib.motion.collision as collision_module
+        from lib.motion.collision import CollisionConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_default = Path(tmpdir) / "collision_avoidance.pth"
+
+            def _fake_download(dest, **_):
+                dest.write_bytes(b"fake-model-bytes")
+                return dest
+
+            with patch.object(
+                collision_module, "DEFAULT_COLLISION_MODEL_PATH", fake_default
+            ), patch.object(
+                collision_module, "_download_from_hub", side_effect=_fake_download
+            ) as mock_download:
+                config = CollisionConfig(model_path=fake_default)
+
+            mock_download.assert_called_once()
+            assert config.model_path == fake_default
