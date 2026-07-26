@@ -17,7 +17,7 @@ DEFAULT_COLLISION_MODEL_PATH = DEPLOY_ROOT / "assets/models/collision_avoidance.
 
 # Fallback source when collision_model_path doesn't exist locally — see
 # lib/motion/collision.py::_download_from_hub.
-DEFAULT_COLLISION_MODEL_HF_REPO_ID = "ahestevenz/collision-avoidance"
+DEFAULT_COLLISION_MODEL_HF_REPO_ID = "ahestevenz/collision_avoidance"
 DEFAULT_COLLISION_MODEL_HF_FILENAME = "collision_avoidance.pth"
 DEFAULT_COLLISION_MODEL_HF_REVISION = "v1.0"
 
