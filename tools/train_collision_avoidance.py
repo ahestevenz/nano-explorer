@@ -21,6 +21,17 @@ Usage
   python tools/train_collision_avoidance.py --dataset datasets/collision_001
   python tools/train_collision_avoidance.py --dataset datasets/collision_001 --epochs 15 --lr 1e-4
   python tools/train_collision_avoidance.py --dataset datasets/collision_001 --output custom.pth
+
+Required packages
+------------------
+  Linux (Jetson, JetPack 4.6.1 / CUDA 10.2):
+    - torch==1.10.0        (install manually — see doc/jetbot-setup.md)
+    - torchvision==0.11.0  (build from source — see doc/jetbot-setup.md)
+    - OpenCV 4.1.1 (bundled with JetPack — do not reinstall via pip)
+
+  macOS (CPU or Apple Silicon MPS):
+    - pip install torch torchvision
+    - pip install opencv-python
 """
 
 import argparse
@@ -152,7 +163,12 @@ def train(dataset_dir: Path, cfg: TrainConfig):
         num_workers=2,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"Device:  {device}")
 
     model = _build_model().to(device)
