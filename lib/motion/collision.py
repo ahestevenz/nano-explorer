@@ -38,7 +38,11 @@ def _download_from_hub(dest: Path, repo_id: str, filename: str, revision: str) -
     own error.
     """
     logger.info(f"Model not found at {dest}; attempting download of {repo_id}@{revision}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(f"Cannot create {dest.parent}: {exc}")
+        return dest
 
     try:
         from huggingface_hub import hf_hub_download
@@ -106,7 +110,10 @@ class CollisionConfig(BaseModel):
                     "This is the default (NanoSettings.collision_model_path, see lib/settings.py)."
                 )
             else:
-                source = "This path was set explicitly (via --model, an env var, or ~/.nano-explorer.env)."
+                source = (
+                    "This path was set explicitly "
+                    "(via --model, an env var, or ~/.nano-explorer.env)."
+                )
             raise ValueError(
                 f"Collision model not found: {path.resolve()}\n"
                 f"{source}\n"
@@ -117,7 +124,8 @@ class CollisionConfig(BaseModel):
                 "from Hugging Face — see the warning above for why that failed.\n"
                 "\n"
                 "Fix it one of these ways:\n"
-                "  1. Train a model:  python tools/train_collision_avoidance.py --dataset <dataset_dir>\n"
+                "  1. Train a model:  python tools/train_collision_avoidance.py "
+                "--dataset <dataset_dir>\n"
                 "  2. Copy an existing .pth to that path\n"
                 "  3. Point at a different model:\n"
                 "       --model /path/to/model.pth              (this run only)\n"
