@@ -340,11 +340,11 @@ class TestCollisionModelPath:
     def test_missing_model_raises_value_error(self):
         from lib.motion.collision import CollisionConfig
 
-        with pytest.raises(ValueError, match="Model not found"):
+        with pytest.raises(ValueError, match="model not found"):
             CollisionConfig(model_path="/nonexistent/model.pth")
 
     def test_missing_relative_model_raises_value_error(self):
         from lib.motion.collision import CollisionConfig
 
-        with pytest.raises(ValueError, match="Model not found"):
+        with pytest.raises(ValueError, match="model not found"):
             CollisionConfig(model_path="assets/models/does_not_exist.pth")
