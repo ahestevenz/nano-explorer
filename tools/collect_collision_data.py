@@ -23,6 +23,8 @@ Usage
 -----
   python tools/collect_collision_data.py --out datasets/collision_001
   python tools/collect_collision_data.py --out datasets/collision_001 --speed 0.25
+  python tools/collect_collision_data.py --out datasets/collision_001 --stream
+  python tools/collect_collision_data.py --out datasets/collision_001 --stream --stream-port 8080
 """
 
 import argparse
@@ -65,8 +67,23 @@ def _drive(motors, speed, turn_gain, action):
         motors.turn_right(turn)
 
 
-def _save_frame(cam, counts, dirs, label):
-    """Capture one frame and save it to the correct label subdirectory."""
+def _annotate(frame, counts, label=None):
+    """Overlay collection stats onto a copy of frame."""
+    import cv2
+
+    out = frame.copy()
+    stats = f"free={counts['free']}  blocked={counts['blocked']}"
+    cv2.putText(out, stats, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    if label is not None:
+        color = (0, 255, 0) if label == "free" else (0, 0, 255)
+        cv2.putText(
+            out, label.upper(), (8, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2, cv2.LINE_AA
+        )
+    return out
+
+
+def _save_frame(cam, counts, dirs, label, server):
+    """Capture one frame, save it, and push an annotated version to the stream."""
     import cv2
 
     idx = counts[label]
@@ -78,9 +95,11 @@ def _save_frame(cam, counts, dirs, label):
         f"\r[collect] free={counts['free']}  blocked={counts['blocked']}  " f"saved={label:<7}  "
     )
     sys.stdout.flush()
+    if server is not None:
+        server.frame_buffer.put(_annotate(frame, counts, label))
 
 
-def _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain):
+def _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain, server):
     """Keyboard loop: arrow keys drive, f/b capture, q quits."""
     import select
 
@@ -89,6 +108,8 @@ def _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain):
         while True:
             rlist, _, _ = select.select([sys.stdin], [], [], 0.02)
             if not rlist:
+                if server is not None:
+                    server.frame_buffer.put(_annotate(cam.read(), counts))
                 continue
 
             chunk = os.read(fd, 3)
@@ -96,10 +117,10 @@ def _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain):
             if chunk in (b"q", b"Q", b"\x03"):
                 break
             if chunk in (b"f", b"F"):
-                _save_frame(cam, counts, dirs, "free")
+                _save_frame(cam, counts, dirs, "free", server)
                 continue
             if chunk in (b"b", b"B"):
-                _save_frame(cam, counts, dirs, "blocked")
+                _save_frame(cam, counts, dirs, "blocked", server)
                 continue
 
             action = _ARROW_MAP.get(chunk)
@@ -114,12 +135,20 @@ def _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain):
             stop_timer.cancel()
 
 
-def collect(out_dir: Path, speed: float, turn_gain: float, camera_source: str):
+def collect(
+    out_dir: Path,
+    speed: float,
+    turn_gain: float,
+    camera_source: str,
+    stream: bool,
+    stream_port: int,
+):
     import termios
     import tty
 
-    from lib.camera import Camera
+    from lib.camera import Camera, MjpegServer
     from lib.motor import MotorController
+    from lib.network import get_wifi_ip
 
     free_dir = out_dir / "free"
     blocked_dir = out_dir / "blocked"
@@ -137,6 +166,13 @@ def collect(out_dir: Path, speed: float, turn_gain: float, camera_source: str):
     motors.open()
     cam.open()
 
+    server = None
+    if stream:
+        server = MjpegServer(port=stream_port)
+        server.start()
+        ip = get_wifi_ip() or "<nano-ip>"
+        print(f"[collect] Stream -> http://{ip}:{stream_port}/stream")
+
     print(
         f"\n[collect] Saving to {out_dir}\n"
         f"[collect] Arrow keys: drive robot to position\n"
@@ -151,11 +187,13 @@ def collect(out_dir: Path, speed: float, turn_gain: float, camera_source: str):
 
     try:
         tty.setraw(fd)
-        _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain)
+        _run_loop(fd, cam, motors, counts, dirs, speed, turn_gain, server)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
         motors.stop()
         motors.close()
+        if server is not None:
+            server.stop()
         cam.release()
         print(f"\n[collect] Done — free={counts['free']}  blocked={counts['blocked']}")
 
@@ -177,6 +215,19 @@ def main():
         choices=["csi", "usb"],
         help="Camera source",
     )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        default=False,
+        help="Enable MJPEG stream (view in browser)",
+    )
+    parser.add_argument(
+        "--stream-port",
+        type=int,
+        default=8080,
+        dest="stream_port",
+        help="MJPEG server port",
+    )
     args = parser.parse_args()
 
     collect(
@@ -184,6 +235,8 @@ def main():
         speed=args.speed,
         turn_gain=args.turn_gain,
         camera_source=args.camera_source,
+        stream=args.stream,
+        stream_port=args.stream_port,
     )
 
 

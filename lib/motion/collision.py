@@ -4,7 +4,10 @@ torch and torchvision are imported lazily inside _load_model() so that
 importing this module never triggers the OpenBLAS SIGILL on the Nano.
 """
 
+import shutil
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -14,7 +17,57 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.motor import MotorController
-from lib.settings import PROJECT_ROOT_PATH
+from lib.settings import (
+    DEFAULT_COLLISION_MODEL_HF_FILENAME,
+    DEFAULT_COLLISION_MODEL_HF_REPO_ID,
+    DEFAULT_COLLISION_MODEL_HF_REVISION,
+    DEFAULT_COLLISION_MODEL_PATH,
+)
+
+_HF_RESOLVE_URL = "https://huggingface.co/{repo_id}/resolve/{revision}/{filename}"
+
+
+def _download_from_hub(dest: Path, repo_id: str, filename: str, revision: str) -> Path:
+    """
+    Best-effort fetch of a missing model from Hugging Face Hub.
+
+    Prefers huggingface_hub (handles auth/private repos) but falls back to a
+    plain HTTPS GET so this also works on the Jetson's Python 3.6 venv, where
+    huggingface_hub isn't installable (it requires Python >= 3.7). Any failure
+    here is non-fatal — callers just see `dest` still missing and raise their
+    own error.
+    """
+    logger.info(f"Model not found at {dest}; attempting download of {repo_id}@{revision}")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(f"Cannot create {dest.parent}: {exc}")
+        return dest
+
+    try:
+        from huggingface_hub import hf_hub_download
+
+        cached_path = hf_hub_download(repo_id=repo_id, filename=filename, revision=revision)
+        shutil.copy(cached_path, dest)
+        logger.info(f"Downloaded model via huggingface_hub to {dest}")
+        return dest
+    except ImportError:
+        logger.debug("huggingface_hub not installed; falling back to direct HTTPS download")
+    except Exception as exc:  # network/auth/404 errors surfaced by huggingface_hub
+        logger.warning(f"huggingface_hub download failed: {exc}")
+        return dest
+
+    url = _HF_RESOLVE_URL.format(repo_id=repo_id, revision=revision, filename=filename)
+    tmp_dest = dest.with_name(dest.name + ".part")
+    try:
+        urllib.request.urlretrieve(url, tmp_dest)  # nosec B310 - fixed https:// HF URL
+        tmp_dest.rename(dest)
+        logger.info(f"Downloaded model via direct HTTPS to {dest}")
+    except (urllib.error.URLError, OSError) as exc:
+        logger.warning(f"Direct download from {url} failed: {exc}")
+        if tmp_dest.exists():
+            tmp_dest.unlink()
+    return dest
 
 
 class CollisionConfig(BaseModel):
@@ -22,24 +75,70 @@ class CollisionConfig(BaseModel):
     Collision avoidance config.
 
     Args:
-        model_path: Path to .pth or .engine model file.
-        threshold:  Probability of "blocked" above which the robot reacts.
-        speed:      Forward motor speed [0.0, 1.0].
-        stream:     Start a background MJPEG camera stream while running.
-        stream_port: Port for the MJPEG server (default 8080).
+        hf_repo_id:   Hugging Face repo to download model_path from if missing.
+        hf_filename:  Filename within hf_repo_id.
+        hf_revision:  Tag/branch/commit of hf_repo_id to download.
+        model_path:   Path to .pth or .engine model file.
+        threshold:    Probability of "blocked" above which the robot reacts.
+        speed:        Forward motor speed [0.0, 1.0].
+        stream:       Start a background MJPEG camera stream while running.
+        stream_port:  Port for the MJPEG server (default 8080).
     """
 
-    model_path: Path = PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
+    hf_repo_id: str = DEFAULT_COLLISION_MODEL_HF_REPO_ID
+    hf_filename: str = DEFAULT_COLLISION_MODEL_HF_FILENAME
+    hf_revision: str = DEFAULT_COLLISION_MODEL_HF_REVISION
+    model_path: Path = DEFAULT_COLLISION_MODEL_PATH
     threshold: float = Field(0.5, ge=0.0, le=1.0)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
 
     @validator("model_path")
-    def model_path_must_exist(cls, v):  # pylint: disable=no-self-argument
-        if not Path(v).exists():
-            raise ValueError(f"Model not found: {v}\nTrain one with: nano-explorer ml train")
-        return v
+    def model_path_must_exist(cls, v, values):  # pylint: disable=no-self-argument
+        path = Path(v).expanduser()
+        is_default = path == Path(DEFAULT_COLLISION_MODEL_PATH)
+
+        # Only auto-download for the untouched default path. If the caller set
+        # model_path explicitly (--model, env var, config file), a typo'd or
+        # wrong path should raise, not silently fetch an unrelated file there.
+        if not path.exists() and is_default:
+            path = _download_from_hub(
+                dest=path,
+                repo_id=values.get("hf_repo_id", DEFAULT_COLLISION_MODEL_HF_REPO_ID),
+                filename=values.get("hf_filename", DEFAULT_COLLISION_MODEL_HF_FILENAME),
+                revision=values.get("hf_revision", DEFAULT_COLLISION_MODEL_HF_REVISION),
+            )
+        if not path.exists():
+            if is_default:
+                source = (
+                    "This is the default (NanoSettings.collision_model_path, see lib/settings.py). "
+                    "Also tried downloading "
+                    f"{values.get('hf_repo_id', DEFAULT_COLLISION_MODEL_HF_REPO_ID)}"
+                    f"/{values.get('hf_filename', DEFAULT_COLLISION_MODEL_HF_FILENAME)}"
+                    f"@{values.get('hf_revision', DEFAULT_COLLISION_MODEL_HF_REVISION)} "
+                    "from Hugging Face — see the warning above for why that failed."
+                )
+            else:
+                source = (
+                    "This path was set explicitly "
+                    "(via --model, an env var, or ~/.nano-explorer.env)."
+                )
+            raise ValueError(
+                f"Collision model not found: {path.resolve()}\n"
+                f"{source}\n"
+                "\n"
+                "Fix it one of these ways:\n"
+                "  1. Train a model:  python tools/train_collision_avoidance.py "
+                "--dataset <dataset_dir>\n"
+                "  2. Copy an existing .pth to that path\n"
+                "  3. Point at a different model:\n"
+                "       --model /path/to/model.pth              (this run only)\n"
+                "       NANO_COLLISION_MODEL_PATH=/path/to/model.pth  (env var)\n"
+                "       ~/.nano-explorer.env                    (persistent — add "
+                "NANO_COLLISION_MODEL_PATH=... on its own line)"
+            )
+        return path
 
 
 class CollisionAvoider(CameraMotionMixIn):

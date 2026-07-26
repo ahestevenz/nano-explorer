@@ -23,6 +23,7 @@ import argparse
 import sys
 
 from colorama import Fore, Style, init
+from pydantic import ValidationError
 
 from lib.settings import NanoSettings
 
@@ -115,6 +116,13 @@ def main():
         except KeyboardInterrupt:
             print(Fore.YELLOW + "\n[nano-explorer] Interrupted by user.")
             sys.exit(0)
+        except ValidationError as exc:
+            # Bad config values (e.g. a missing model file) are a user error,
+            # not a bug — show the validator's message, not a stack trace.
+            print(Fore.RED + "\n[nano-explorer] Invalid configuration:\n")
+            for err in exc.errors():
+                print(Fore.RED + err["msg"])
+            sys.exit(1)
         except Exception as exc:
             print(Fore.RED + f"\n[nano-explorer] Fatal error: {exc}")
             raise

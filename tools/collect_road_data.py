@@ -20,6 +20,8 @@ Usage
 -----
   python tools/collect_road_data.py --out datasets/road_001
   python tools/collect_road_data.py --out datasets/road_001 --speed 0.25 --fps 10
+  python tools/collect_road_data.py --out datasets/road_001 --stream
+  python tools/collect_road_data.py --out datasets/road_001 --stream --stream-port 8080
 """
 
 import argparse
@@ -67,8 +69,26 @@ def _apply_key(motors, state, speed, turn_gain, action, angle):
         motors.turn_right(turn)
 
 
-def _write_frame(cam, out_dir, count, state, writer, csv_file):
-    """Capture one frame, save it, and append its label to the CSV."""
+def _annotate(frame, count, state):
+    """Overlay collection stats onto a copy of frame."""
+    import cv2
+
+    out = frame.copy()
+    cv2.putText(
+        out,
+        f"frames={count[0]}  angle={state['angle']:+.1f}  {state['action']}",
+        (8, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    return out
+
+
+def _write_frame(cam, out_dir, count, state, writer, csv_file, server):
+    """Capture one frame, save it, append its label to the CSV, and push to stream."""
     import cv2
 
     frame = cam.read()
@@ -82,10 +102,23 @@ def _write_frame(cam, out_dir, count, state, writer, csv_file):
         f"angle={state['angle']:+.1f}   "
     )
     sys.stdout.flush()
+    if server is not None:
+        server.frame_buffer.put(_annotate(frame, count, state))
 
 
 def _run_loop(
-    fd, cam, motors, out_dir, state, count, writer, csv_file, frame_interval, speed, turn_gain
+    fd,
+    cam,
+    motors,
+    out_dir,
+    state,
+    count,
+    writer,
+    csv_file,
+    frame_interval,
+    speed,
+    turn_gain,
+    server,
 ):
     """Keyboard + frame-capture loop. Returns when the user presses q."""
     import select
@@ -107,9 +140,11 @@ def _run_loop(
 
             now = time.monotonic()
             if now >= next_frame and state["action"] != "stop":
-                _write_frame(cam, out_dir, count, state, writer, csv_file)
+                _write_frame(cam, out_dir, count, state, writer, csv_file, server)
                 next_frame = now + frame_interval
             else:
+                if server is not None:
+                    server.frame_buffer.put(_annotate(cam.read(), count, state))
                 time.sleep(0.01)
 
     except KeyboardInterrupt:
@@ -119,12 +154,21 @@ def _run_loop(
             stop_timer.cancel()
 
 
-def collect(out_dir: Path, speed: float, turn_gain: float, fps: int, camera_source: str):
+def collect(
+    out_dir: Path,
+    speed: float,
+    turn_gain: float,
+    fps: int,
+    camera_source: str,
+    stream: bool,
+    stream_port: int,
+):
     import termios
     import tty
 
-    from lib.camera import Camera
+    from lib.camera import Camera, MjpegServer
     from lib.motor import MotorController
+    from lib.network import get_wifi_ip
 
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "labels.csv"
@@ -134,6 +178,13 @@ def collect(out_dir: Path, speed: float, turn_gain: float, fps: int, camera_sour
     cam = Camera(source=camera_source, fps=fps)
     motors.open()
     cam.open()
+
+    server = None
+    if stream:
+        server = MjpegServer(port=stream_port)
+        server.start()
+        ip = get_wifi_ip() or "<nano-ip>"
+        print(f"[collect] Stream -> http://{ip}:{stream_port}/stream")
 
     state = {"action": "stop", "angle": 0.0}
     count = [0]
@@ -165,11 +216,14 @@ def collect(out_dir: Path, speed: float, turn_gain: float, fps: int, camera_sour
                 1.0 / fps,
                 speed,
                 turn_gain,
+                server,
             )
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
             motors.stop()
             motors.close()
+            if server is not None:
+                server.stop()
             cam.release()
             print(f"\n[collect] Saved {count[0]} frames to {out_dir}")
 
@@ -192,6 +246,19 @@ def main():
         choices=["csi", "usb"],
         help="Camera source",
     )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        default=False,
+        help="Enable MJPEG stream (view in browser)",
+    )
+    parser.add_argument(
+        "--stream-port",
+        type=int,
+        default=8080,
+        dest="stream_port",
+        help="MJPEG server port",
+    )
     args = parser.parse_args()
 
     collect(
@@ -200,6 +267,8 @@ def main():
         turn_gain=args.turn_gain,
         fps=args.fps,
         camera_source=args.camera_source,
+        stream=args.stream,
+        stream_port=args.stream_port,
     )
 
 

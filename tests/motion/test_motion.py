@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.settings import PROJECT_ROOT_PATH, NanoSettings
+from lib.settings import DEFAULT_COLLISION_MODEL_PATH, NanoSettings
 
 
 # Helpers
@@ -178,10 +178,7 @@ class TestCollisionDefaults:
         settings = NanoSettings()
         _ = _parse(["collision", "--model", "assets/models/fake.pth"], settings)
         # explicit --model wins; test the settings default is wired up correctly
-        assert (
-            settings.collision_model_path
-            == PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
-        )
+        assert settings.collision_model_path == DEFAULT_COLLISION_MODEL_PATH
 
     def test_default_threshold_from_settings(self):
         settings = NanoSettings()
@@ -343,11 +340,41 @@ class TestCollisionModelPath:
     def test_missing_model_raises_value_error(self):
         from lib.motion.collision import CollisionConfig
 
-        with pytest.raises(ValueError, match="Model not found"):
+        with pytest.raises(ValueError, match="model not found"):
             CollisionConfig(model_path="/nonexistent/model.pth")
 
     def test_missing_relative_model_raises_value_error(self):
         from lib.motion.collision import CollisionConfig
 
-        with pytest.raises(ValueError, match="Model not found"):
+        with pytest.raises(ValueError, match="model not found"):
             CollisionConfig(model_path="assets/models/does_not_exist.pth")
+
+    def test_non_default_missing_path_does_not_trigger_download(self):
+        from lib.motion.collision import CollisionConfig
+
+        with patch("lib.motion.collision._download_from_hub") as mock_download, pytest.raises(
+            ValueError, match="model not found"
+        ):
+            CollisionConfig(model_path="/nonexistent/model.pth")
+        mock_download.assert_not_called()
+
+    def test_default_missing_path_downloads_from_hub(self):
+        import lib.motion.collision as collision_module
+        from lib.motion.collision import CollisionConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_default = Path(tmpdir) / "collision_avoidance.pth"
+
+            def _fake_download(dest, **_):
+                dest.write_bytes(b"fake-model-bytes")
+                return dest
+
+            with patch.object(
+                collision_module, "DEFAULT_COLLISION_MODEL_PATH", fake_default
+            ), patch.object(
+                collision_module, "_download_from_hub", side_effect=_fake_download
+            ) as mock_download:
+                config = CollisionConfig(model_path=fake_default)
+
+            mock_download.assert_called_once()
+            assert config.model_path == fake_default
