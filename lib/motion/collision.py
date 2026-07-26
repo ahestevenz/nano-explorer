@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.motor import MotorController
-from lib.settings import PROJECT_ROOT_PATH
+from lib.settings import DEFAULT_COLLISION_MODEL_PATH
 
 
 class CollisionConfig(BaseModel):
@@ -29,7 +29,7 @@ class CollisionConfig(BaseModel):
         stream_port: Port for the MJPEG server (default 8080).
     """
 
-    model_path: Path = PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
+    model_path: Path = DEFAULT_COLLISION_MODEL_PATH
     threshold: float = Field(0.5, ge=0.0, le=1.0)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     stream: bool = False
@@ -38,7 +38,19 @@ class CollisionConfig(BaseModel):
     @validator("model_path")
     def model_path_must_exist(cls, v):  # pylint: disable=no-self-argument
         if not Path(v).exists():
-            raise ValueError(f"Model not found: {v}\nTrain one with: nano-explorer ml train")
+            raise ValueError(
+                f"Model not found: {v}\n"
+                "\n"
+                "This path comes from NanoSettings.collision_model_path, which "
+                f"defaults to {DEFAULT_COLLISION_MODEL_PATH} (see lib/settings.py). "
+                "Override it with one of:\n"
+                "  --model /path/to/model.pth              (this run only)\n"
+                "  NANO_COLLISION_MODEL_PATH=/path/to/model.pth  (env var)\n"
+                "  ~/.nano-explorer.env                      (persistent config file, "
+                "one NANO_<SETTING>=value line per override)\n"
+                "\n"
+                "Train one with: python tools/train_collision_avoidance.py --dataset <dataset_dir>"
+            )
         return v
 
 

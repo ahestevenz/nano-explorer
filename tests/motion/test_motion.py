@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.settings import PROJECT_ROOT_PATH, NanoSettings
+from lib.settings import DEFAULT_COLLISION_MODEL_PATH, NanoSettings
 
 
 # Helpers
@@ -178,10 +178,7 @@ class TestCollisionDefaults:
         settings = NanoSettings()
         _ = _parse(["collision", "--model", "assets/models/fake.pth"], settings)
         # explicit --model wins; test the settings default is wired up correctly
-        assert (
-            settings.collision_model_path
-            == PROJECT_ROOT_PATH / "assets/models/collision_avoidance.pth"
-        )
+        assert settings.collision_model_path == DEFAULT_COLLISION_MODEL_PATH
 
     def test_default_threshold_from_settings(self):
         settings = NanoSettings()
