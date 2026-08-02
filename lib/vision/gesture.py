@@ -19,7 +19,10 @@ All torch imports are deferred to run() to avoid SIGILL on startup.
 
 import threading
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
+import cv2
+import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
@@ -39,6 +42,18 @@ _KP = {
 }
 
 _MARGIN = 0.05  # normalised coordinate deadband
+
+_GESTURE_NAMES = ["forward", "backward", "left", "right", "stop"]
+
+# BGR, matched to the accent colors used for these gestures in README.md / doc/images/gestures
+_GESTURE_COLORS: Dict[str, Tuple[int, int, int]] = {
+    "forward": (55, 127, 26),
+    "backward": (46, 34, 207),
+    "left": (0, 103, 154),
+    "right": (0, 103, 154),
+    "stop": (30, 7, 130),
+    "none": (140, 140, 140),
+}
 
 
 class GestureConfig(BaseModel):
@@ -83,14 +98,11 @@ class GestureController(CameraMotionMixIn):
             ).dict()
         )
 
-    def _classify(self, peaks, objects) -> str:
-        """
-        Map the first detected person's pose to a command string.
+    @staticmethod
+    def _keypoints(peaks, objects) -> Dict[str, Optional[Tuple[float, float]]]:
+        """Return {name: (x, y)} in normalised coords for the first detected person."""
 
-        Returns one of: "forward" "backward" "left" "right" "stop" "none"
-        """
-
-        def kp(name):
+        def kp(name: str) -> Optional[Tuple[float, float]]:
             idx = _KP[name]
             k = int(objects[0, 0, idx])
             if k < 0:
@@ -98,12 +110,23 @@ class GestureController(CameraMotionMixIn):
             # peaks are (y_norm, x_norm)
             return float(peaks[0, idx, k, 1]), float(peaks[0, idx, k, 0])  # (x, y)
 
-        ls = kp("left_shoulder")
-        rs = kp("right_shoulder")
-        lw = kp("left_wrist")
-        rw = kp("right_wrist")
-        lh = kp("left_hip")
-        rh = kp("right_hip")
+        return {name: kp(name) for name in _KP}
+
+    def _classify(self, peaks, objects) -> str:
+        """
+        Map the first detected person's pose to a command string.
+
+        Returns one of: "forward" "backward" "left" "right" "stop" "none"
+        """
+        kps = self._keypoints(peaks, objects)
+        ls, rs, lw, rw, lh, rh = (
+            kps["left_shoulder"],
+            kps["right_shoulder"],
+            kps["left_wrist"],
+            kps["right_wrist"],
+            kps["left_hip"],
+            kps["right_hip"],
+        )
 
         if None in (ls, rs, lw, rw):
             return "none"
@@ -137,6 +160,110 @@ class GestureController(CameraMotionMixIn):
             return "stop"
 
         return "none"
+
+    def _scores(self, peaks, objects) -> Dict[str, Optional[float]]:
+        """
+        Per-gesture match strength for the HUD, built from the same keypoints _classify
+        uses (not consumed by _classify itself — display only). Each value is the signed
+        margin, in normalised coordinate units, by which that gesture's primary condition
+        clears _MARGIN: 0 sits exactly at the decision boundary, positive means "matching
+        more confidently", None means a required keypoint wasn't detected. "left"/"right"
+        only score the arm-extension check, not the secondary other-arm-level condition
+        _classify also applies.
+        """
+        kps = self._keypoints(peaks, objects)
+        ls, rs, lw, rw, lh, rh = (
+            kps["left_shoulder"],
+            kps["right_shoulder"],
+            kps["left_wrist"],
+            kps["right_wrist"],
+            kps["left_hip"],
+            kps["right_hip"],
+        )
+
+        if None in (ls, rs, lw, rw):
+            return {name: None for name in _GESTURE_NAMES}
+
+        ls_x, ls_y = ls
+        rs_x, rs_y = rs
+        lw_x, lw_y = lw
+        rw_x, rw_y = rw
+
+        scores: Dict[str, Optional[float]] = {
+            "forward": min(ls_y - lw_y, rs_y - rw_y) - _MARGIN,
+            "left": (ls_x - lw_x) - _MARGIN,
+            "right": (rw_x - rs_x) - _MARGIN,
+            "stop": _MARGIN - max(abs(lw_y - ls_y), abs(rw_y - rs_y)),
+        }
+        if lh and rh:
+            _, lh_y = lh
+            _, rh_y = rh
+            scores["backward"] = min(lw_y - lh_y, rw_y - rh_y) - _MARGIN
+        else:
+            scores["backward"] = None
+        return scores
+
+    @staticmethod
+    def _bar_fraction(score: Optional[float]) -> float:
+        """Map a _scores() margin to a [0, 1] bar length; 0.5 sits at the decision boundary."""
+        if score is None:
+            return 0.0
+        return max(0.0, min(1.0, 0.5 + score / (4 * _MARGIN)))
+
+    def _annotate_frame(self, frame, counts, objects, peaks, gesture: str) -> np.ndarray:
+        """Skeleton dots plus the identified movement and a live per-gesture score HUD."""
+        out = self._estimator.annotate_frame(frame, counts, objects, peaks)
+        scores = self._scores(peaks, objects)
+        color = _GESTURE_COLORS.get(gesture, _GESTURE_COLORS["none"])
+
+        # Identified movement, top-left corner
+        label = gesture.upper()
+        (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        cv2.rectangle(out, (10, 10), (10 + tw + 16, 10 + th + baseline + 14), color, -1)
+        cv2.putText(
+            out,
+            label,
+            (18, 10 + th + 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        # Per-gesture score bars, top-right corner
+        panel_w, row_h, bar_w = 150, 20, 80
+        panel_x = out.shape[1] - panel_w - 10
+        panel_y = 10
+        cv2.rectangle(
+            out,
+            (panel_x, panel_y),
+            (panel_x + panel_w, panel_y + row_h * len(_GESTURE_NAMES) + 8),
+            (30, 30, 30),
+            -1,
+        )
+        for i, name in enumerate(_GESTURE_NAMES):
+            y = panel_y + 18 + i * row_h
+            row_color = _GESTURE_COLORS[name] if name == gesture else (130, 130, 130)
+            cv2.putText(
+                out,
+                name[:4],
+                (panel_x + 6, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                row_color,
+                1,
+                cv2.LINE_AA,
+            )
+            bar_x = panel_x + 46
+            cv2.rectangle(out, (bar_x, y - 10), (bar_x + bar_w, y + 2), (70, 70, 70), 1)
+            frac = self._bar_fraction(scores.get(name))
+            if frac > 0:
+                cv2.rectangle(
+                    out, (bar_x, y - 10), (bar_x + int(bar_w * frac), y + 2), row_color, -1
+                )
+
+        return out
 
     def run(self) -> None:
         self._estimator._load()  # pylint: disable=protected-access
@@ -184,7 +311,7 @@ class GestureController(CameraMotionMixIn):
                     logger.debug(f"Gesture: {gesture}")
 
                     if self._server is not None:
-                        annotated = self._estimator.annotate_frame(frame, counts, objects, peaks)
+                        annotated = self._annotate_frame(frame, counts, objects, peaks, gesture)
                         self._push_frame(annotated)
 
             except KeyboardInterrupt:
