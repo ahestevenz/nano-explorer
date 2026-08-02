@@ -8,6 +8,6 @@
 #   fcn-resnet18-mhp          Multi-Human Parsing — 15 body-part classes
 #   fcn-resnet18-sun          SUN RGB-D   — 37 indoor classes
 
-model:     fcn-resnet18-voc
+model:     fcn-resnet18-sun
 visualize: overlay   # "overlay" | "mask"
 threshold: 0.0

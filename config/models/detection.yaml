@@ -13,7 +13,7 @@
 #   facenet               face detection
 
 backend:   jetson-inference
-model:     ssd-mobilenet-v2
+model:     ssd-inception-v2
 threshold: 0.50
 
 # ── opencv-dnn (uncomment to use) ─────────────────────────────────────────────
