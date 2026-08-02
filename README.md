@@ -135,6 +135,9 @@ skeleton keypoints (shoulders, wrists, hips) into a simple rule-based classifier
 position is considered — there's no hand/finger tracking, so gestures like a fist or a wave
 aren't recognised. Poses are described from the operator's point of view, facing the camera.
 
+Unlike the other vision commands above, gestures drive the motors directly, so arrow-key
+teleop isn't available here — press `q` (or Ctrl+C) to stop.
+
 | | | | | |
 |:---:|:---:|:---:|:---:|:---:|
 | <img src="doc/images/gestures/forward.svg" width="120"><br>**forward** | <img src="doc/images/gestures/backward.svg" width="120"><br>**backward** | <img src="doc/images/gestures/left.svg" width="120"><br>**turn left** | <img src="doc/images/gestures/right.svg" width="120"><br>**turn right** | <img src="doc/images/gestures/stop.svg" width="120"><br>**stop** |

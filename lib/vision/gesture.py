@@ -17,6 +17,7 @@ Keypoint indices (COCO 17-point):
 All torch imports are deferred to run() to avoid SIGILL on startup.
 """
 
+import threading
 from pathlib import Path
 
 from loguru import logger
@@ -140,9 +141,14 @@ class GestureController(CameraMotionMixIn):
     def run(self) -> None:
         self._estimator._load()  # pylint: disable=protected-access
         self._motors.open()
+        _stop = threading.Event()
 
         if self._config.stream:
             self._start_server_stream(stream_port=self._config.stream_port)
+
+        # Gestures drive the motors directly, so arrow-key teleop can't be used here
+        # (it would fight the pose-driven commands) — just listen for q/Ctrl+C to quit.
+        self._start_quit_listener(_stop)
 
         dispatch = {
             "forward": lambda: self._motors.forward(self._config.speed),
@@ -154,7 +160,7 @@ class GestureController(CameraMotionMixIn):
         }
 
         logger.info(
-            "Gesture control active — body poses drive the robot (Ctrl+C to stop)\n"
+            "Gesture control active — body poses drive the robot (q or Ctrl+C to stop)\n"
             "  Both arms UP   → forward\n"
             "  Both arms DOWN → backward\n"
             "  Left arm OUT   → turn left\n"
@@ -164,7 +170,7 @@ class GestureController(CameraMotionMixIn):
 
         with Camera() as cam:
             try:
-                while True:
+                while not _stop.is_set():
                     frame = cam.read()
                     counts, objects, peaks = self._estimator.infer(frame)
 
@@ -184,6 +190,7 @@ class GestureController(CameraMotionMixIn):
             except KeyboardInterrupt:
                 pass
             finally:
+                _stop.set()
                 self._motors.stop()
                 self._motors.close()
                 if self._server is not None:
