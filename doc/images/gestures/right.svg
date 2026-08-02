@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 200" width="160" height="200">
+  <rect x="1" y="1" width="158" height="198" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="135" y="34" font-family="sans-serif" font-size="26" font-weight="bold" fill="#9a6700" text-anchor="middle">&#8631;</text>
+  <circle cx="80" cy="45" r="16" fill="none" stroke="#1f2328" stroke-width="4"/>
+  <line x1="80" y1="61" x2="80" y2="125" stroke="#1f2328" stroke-width="4" stroke-linecap="round"/>
+  <line x1="80" y1="125" x2="58" y2="176" stroke="#1f2328" stroke-width="4" stroke-linecap="round"/>
+  <line x1="80" y1="125" x2="102" y2="176" stroke="#1f2328" stroke-width="4" stroke-linecap="round"/>
+  <line x1="64" y1="68" x2="54" y2="118" stroke="#1f2328" stroke-width="4" stroke-linecap="round"/>
+  <line x1="96" y1="68" x2="142" y2="68" stroke="#9a6700" stroke-width="4" stroke-linecap="round"/>
+  <text x="80" y="171" font-family="sans-serif" font-size="10" fill="#57606a" text-anchor="middle">Right arm extended sideways</text>
+  <text x="80" y="190" font-family="sans-serif" font-size="15" font-weight="bold" fill="#9a6700" text-anchor="middle">TURN RIGHT</text>
+</svg>
