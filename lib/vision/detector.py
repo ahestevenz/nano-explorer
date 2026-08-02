@@ -23,9 +23,10 @@ module never triggers the OpenBLAS SIGILL on the Nano at startup.
 """
 
 import threading
+import zlib
 from enum import Enum
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Tuple
 
 import cv2
 import numpy as np
@@ -36,6 +37,23 @@ from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.settings import PROJECT_ROOT_PATH
 
 _SCORE_THRESHOLD: float = 0.5
+
+# Distinct BGR colors cycled per class label so each object type stays visually
+# consistent across frames without needing a static label->color config.
+_PALETTE: List[Tuple[int, int, int]] = [
+    (68, 122, 244),  # blue
+    (76, 175, 80),  # green
+    (0, 202, 255),  # gold
+    (60, 76, 231),  # red
+    (191, 82, 155),  # purple
+    (172, 178, 26),  # teal
+    (35, 133, 235),  # orange
+    (139, 148, 241),  # salmon
+    (127, 191, 63),  # lime
+    (219, 152, 52),  # light blue
+    (18, 156, 243),  # amber
+    (166, 165, 149),  # gray
+]
 
 
 class ObjectDetectorBackend(str, Enum):
@@ -215,20 +233,39 @@ class ObjectDetector(CameraMotionMixIn):
             logger.info("Detector stopped.")
 
     @staticmethod
-    def _annotate_frame(frame: np.ndarray, detections: List[dict]) -> np.ndarray:
-        """Draw bounding boxes, labels, and detection count onto a copy of frame."""
+    def _color_for_label(label: str) -> Tuple[int, int, int]:
+        """Deterministic per-class BGR color, stable across frames and runs."""
+        return _PALETTE[zlib.crc32(label.encode("utf-8")) % len(_PALETTE)]
+
+    @staticmethod
+    def _readable_text_color(bgr: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        """Black or white, whichever contrasts better against a BGR fill color."""
+        b, g, r = bgr
+        luminance = 0.114 * b + 0.587 * g + 0.299 * r
+        return (0, 0, 0) if luminance > 140 else (255, 255, 255)
+
+    @classmethod
+    def _annotate_frame(cls, frame: np.ndarray, detections: List[dict]) -> np.ndarray:
+        """Draw per-class colored ROIs, each tagged with object_type/score, plus a count."""
         out = frame.copy()
         for d in detections:
             x1, y1, x2, y2 = d["bbox"]
-            label = f"{d['label']:<20} {d['conf']:.2f}"
-            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            color = cls._color_for_label(d["label"])
+            text_color = cls._readable_text_color(color)
+            tag = f"{d['label']} {d['conf']:.2f}"
+
+            cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+
+            (tw, th), baseline = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+            tag_y0 = max(y1 - th - baseline - 4, 0)
+            cv2.rectangle(out, (x1, tag_y0), (x1 + tw + 6, tag_y0 + th + baseline + 4), color, -1)
             cv2.putText(
                 out,
-                label,
-                (x1, max(y1 - 6, 0)),
+                tag,
+                (x1 + 3, tag_y0 + th + 2),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
-                (0, 255, 0),
+                text_color,
                 1,
                 cv2.LINE_AA,
             )
