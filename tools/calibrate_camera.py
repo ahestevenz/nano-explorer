@@ -48,6 +48,14 @@ Procedure
      config/models/orbslam2_mono.yaml yourself, or re-run with
      --update-config to have it back up the current config and apply the
      new values automatically.
+
+Applying a result you already have (no recapture)
+---------------------------------------------------
+  python tools/calibrate_camera.py --apply-from config/models/orbslam2_mono.calibrated.yaml
+Reads the Camera.* values out of that file and patches the live config
+(with a timestamped backup), skipping the camera/checkerboard step
+entirely. Useful after a run you didn't pass --update-config to at the
+time, or to re-apply an older calibration you'd saved off.
 """
 
 import argparse
@@ -192,6 +200,45 @@ def _patch_camera_block(text: str, values: dict) -> str:
     return text
 
 
+def _extract_camera_values(text: str) -> dict:
+    """Read Camera.fx/fy/cx/cy/k1/k2/p1/p2 out of an orbslam2_mono.yaml-style body."""
+    values = {}
+    for key in ("fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2"):
+        match = re.search(rf"^Camera\.{key}:\s*([-\d.eE]+)", text, flags=re.MULTILINE)
+        if match is None:
+            raise ValueError(f"Camera.{key} line not found — file format may have changed")
+        values[key] = float(match.group(1))
+    return values
+
+
+def _print_values(values: dict) -> None:
+    print(
+        f"  fx={values['fx']:.2f}  fy={values['fy']:.2f}  cx={values['cx']:.2f}  cy={values['cy']:.2f}\n"
+        f"  k1={values['k1']:.5f}  k2={values['k2']:.5f}  p1={values['p1']:.5f}  p2={values['p2']:.5f}"
+    )
+
+
+def _backup_and_apply(values: dict) -> None:
+    """Patch _ORBSLAM2_CONFIG's Camera.* block with values, after backing up the original."""
+    original = _ORBSLAM2_CONFIG.read_text(encoding="utf-8")
+    patched = _patch_camera_block(original, values)
+    backup = _ORBSLAM2_CONFIG.with_suffix(f".yaml.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    backup.write_text(original, encoding="utf-8")
+    _ORBSLAM2_CONFIG.write_text(patched, encoding="utf-8")
+    print(f"[calibrate] Backed up previous config to {backup}")
+    print(f"[calibrate] Updated {_ORBSLAM2_CONFIG} in place")
+
+
+def apply_from(path: Path) -> None:
+    """Skip capture/calibration — apply Camera.* values already written to path."""
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
+    values = _extract_camera_values(path.read_text(encoding="utf-8"))
+    print(f"[calibrate] Applying values from {path}:")
+    _print_values(values)
+    _backup_and_apply(values)
+
+
 def calibrate(
     board_cols: int,
     board_rows: int,
@@ -245,10 +292,9 @@ def calibrate(
     values, mean_error = _run_calibration(objpoints, imgpoints, image_size)
     print(
         "[calibrate] Result "
-        f"(mean reprojection error: {mean_error:.3f} px — under ~0.5 is good, over ~1.0 is suspect):\n"
-        f"  fx={values['fx']:.2f}  fy={values['fy']:.2f}  cx={values['cx']:.2f}  cy={values['cy']:.2f}\n"
-        f"  k1={values['k1']:.5f}  k2={values['k2']:.5f}  p1={values['p1']:.5f}  p2={values['p2']:.5f}"
+        f"(mean reprojection error: {mean_error:.3f} px — under ~0.5 is good, over ~1.0 is suspect):"
     )
+    _print_values(values)
 
     original = _ORBSLAM2_CONFIG.read_text(encoding="utf-8")
     patched = _patch_camera_block(original, values)
@@ -256,17 +302,12 @@ def calibrate(
     print(f"[calibrate] Wrote {out_path}")
 
     if update_config:
-        backup = _ORBSLAM2_CONFIG.with_suffix(
-            f".yaml.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        )
-        backup.write_text(original, encoding="utf-8")
-        _ORBSLAM2_CONFIG.write_text(patched, encoding="utf-8")
-        print(f"[calibrate] Backed up previous config to {backup}")
-        print(f"[calibrate] Updated {_ORBSLAM2_CONFIG} in place")
+        _backup_and_apply(values)
     else:
         print(
             f"[calibrate] Review {out_path}, then copy it over {_ORBSLAM2_CONFIG}\n"
-            "[calibrate] (or re-run with --update-config to do that automatically)."
+            "[calibrate] (or re-run with --update-config to do that automatically, "
+            f"or later with --apply-from {out_path})."
         )
 
 
@@ -307,7 +348,20 @@ def main():
         dest="update_config",
         help=f"Also back up and patch {_ORBSLAM2_CONFIG} in place",
     )
+    parser.add_argument(
+        "--apply-from",
+        type=Path,
+        default=None,
+        dest="apply_from",
+        help="Skip capture entirely — read Camera.* values from an existing calibrated "
+        "config (e.g. a previous run's --out) and apply them to the live config. "
+        "All other options are ignored when this is set.",
+    )
     args = parser.parse_args()
+
+    if args.apply_from is not None:
+        apply_from(args.apply_from)
+        return
 
     calibrate(
         board_cols=args.board_cols,
