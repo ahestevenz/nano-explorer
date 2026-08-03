@@ -19,7 +19,7 @@ DEFAULT_COLLISION_MODEL_PATH = DEPLOY_ROOT / "assets/models/collision_avoidance.
 # lib/motion/collision.py::_download_from_hub.
 DEFAULT_COLLISION_MODEL_HF_REPO_ID = "ahestevenz/collision_avoidance"
 DEFAULT_COLLISION_MODEL_HF_FILENAME = "collision_avoidance.pth"
-DEFAULT_COLLISION_MODEL_HF_REVISION = "v1.0"
+DEFAULT_COLLISION_MODEL_HF_REVISION = "v1.1"
 
 
 class NanoSettings(BaseSettings):  # pylint: disable = no-name-in-module
@@ -31,7 +31,7 @@ class NanoSettings(BaseSettings):  # pylint: disable = no-name-in-module
     collision_model_hf_repo_id: str = DEFAULT_COLLISION_MODEL_HF_REPO_ID
     collision_model_hf_filename: str = DEFAULT_COLLISION_MODEL_HF_FILENAME
     collision_model_hf_revision: str = DEFAULT_COLLISION_MODEL_HF_REVISION
-    collision_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    collision_threshold: float = Field(0.6, ge=0.0, le=1.0)
     camera_source: str = "csi"
     camera_device_id: int = Field(0, ge=0)
 

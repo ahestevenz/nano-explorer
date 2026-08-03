@@ -69,7 +69,7 @@ nano-explorer motion stream --width W --height H --fps FPS
 # Collision avoidance — stream on by default
 nano-explorer motion collision
 nano-explorer motion collision --model PATH            # path to .pth or .engine
-nano-explorer motion collision --threshold T           # blocked probability threshold (default: 0.5)
+nano-explorer motion collision --threshold T           # blocked probability threshold (default: 0.6)
 nano-explorer motion collision --speed SPEED
 nano-explorer motion collision --stream-port PORT
 nano-explorer motion collision --no-stream
