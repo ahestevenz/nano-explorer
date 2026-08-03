@@ -27,8 +27,8 @@ from lib.settings import PROJECT_ROOT_PATH
 
 _VALID_BACKENDS = ["orbslam2"]
 
-# Tracking state labels used by ORB-SLAM2
-_ORBSLAM2_STATES = {0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
+# Tracking state labels used by ORB-SLAM2 (ORB_SLAM2::Tracking::eTrackingState)
+_ORBSLAM2_STATES = {-1: "NOT_READY", 0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
 
 
 class SlamConfig(BaseModel):
@@ -117,8 +117,12 @@ class SlamMapper(CameraMotionMixIn):
 
     def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        state = self._slam.process_image_mono(gray, timestamp)
-        return int(state)
+        # process_image_mono() returns a bool — whether *this frame* tracked
+        # successfully — not the tracking-state enum. Casting that bool through
+        # _ORBSLAM2_STATES only ever produced NO_IMAGES(0)/NOT_INIT(1); OK/LOST
+        # could never appear. get_tracking_state() is the real state accessor.
+        self._slam.process_image_mono(gray, timestamp)
+        return int(self._slam.get_tracking_state())
 
     def _get_trajectory(self) -> list:
         try:
