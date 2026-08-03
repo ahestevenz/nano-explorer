@@ -125,17 +125,18 @@ class SlamMapper(CameraMotionMixIn):
         return int(self._slam.get_tracking_state())
 
     def _get_trajectory(self) -> list:
-        # get_trajectory_points() returns plain nested Python lists, not numpy arrays, and
-        # observed runtime output shows it's sometimes a flattened 16-element sequence
-        # rather than nested 4x4. Normalize both here so every consumer can rely on
-        # numpy-style pose[0, 3] indexing on an actual 4x4 array (_last_pose_xz,
-        # _render_map_view) instead of each guessing at the shape independently.
+        # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
+        # returns one 13-element tuple per processed frame:
+        #   (timestamp, R00,R01,R02,t0, R10,R11,R12,t1, R20,R21,R22,t2)
+        # — a flattened 3x4 [R|t] pose with the timestamp prepended, NOT a 4x4 SE3 matrix
+        # or a flat 16-element sequence. Rebuild the 4x4 here so every consumer can rely
+        # on pose[0, 3] / pose[2, 3] indexing (_last_pose_xz, _render_map_view) instead of
+        # unpacking the raw tuple itself.
         try:
             poses = []
             for raw in self._slam.get_trajectory_points():
-                pose = np.asarray(raw)
-                if pose.ndim == 1 and pose.size == 16:
-                    pose = pose.reshape(4, 4)
+                pose = np.eye(4)
+                pose[:3, :4] = np.asarray(raw[1:], dtype=np.float64).reshape(3, 4)
                 poses.append(pose)
             return poses
         except Exception:  # pylint: disable=broad-except
@@ -200,9 +201,7 @@ class SlamMapper(CameraMotionMixIn):
                     )
                     self._last_state_label = label
 
-                traj_info = (
-                    f"  map_points={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
-                )
+                traj_info = f"  poses={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
                 logger.debug(
                     f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  state={label}{traj_info}"
                 )
@@ -270,8 +269,11 @@ class SlamMapper(CameraMotionMixIn):
                 for i in range(1, len(pts)):
                     cv2.line(canvas, pts[i - 1], pts[i], (0, 180, 0), 1)
                 cv2.circle(canvas, pts[-1], 5, (0, 255, 0), -1)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as e:  # pylint: disable=broad-except
+                # Plotting is best-effort and must never take the stream down, but a
+                # silent `pass` here is exactly what hid the pose-shape bug for two
+                # rounds — log it so a bad frame is visible instead of just blank.
+                logger.debug(f"Map view render skipped this frame: {e}")
 
         color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
         cv2.putText(
