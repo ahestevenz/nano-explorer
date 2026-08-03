@@ -410,6 +410,63 @@ sed -i 's/UMatData\* u, int accessFlags/UMatData* u, cv::AccessFlag accessFlags/
 sed -i 's/CV_VERSION_MAJOR == 3/CV_VERSION_MAJOR >= 3/' \
     src/pyboost_cv3_converter.cpp
 
+# ORBSlamPython.cpp calls system->TrackMonocular() while holding the Python GIL.
+# TrackMonocular() is pure C++ (touches no Python objects) and can take 50-150ms+
+# per frame, so holding the GIL for its whole duration freezes every other Python
+# thread in the process — including nano-explorer's arrow-key teleop reader — for
+# that entire time, every single frame. Release the GIL around the call with the
+# raw CPython Py_BEGIN_ALLOW_THREADS/Py_END_ALLOW_THREADS macros (from Python.h,
+# already pulled in transitively — no new include needed). Note: boost::python
+# has no gil_scoped_release of its own; that's a pybind11 API, not Boost.Python's.
+python3 - << 'EOF'
+path = "src/ORBSlamPython.cpp"
+with open(path) as f:
+    content = f.read()
+
+old = '''bool ORBSlamPython::processMono(cv::Mat image, double timestamp)
+{
+    if (!system)
+    {
+        return false;
+    }
+    if (image.data)
+    {
+        cv::Mat pose = system->TrackMonocular(image, timestamp);
+        return !pose.empty();
+    }
+    else
+    {
+        return false;
+    }
+}'''
+
+new = '''bool ORBSlamPython::processMono(cv::Mat image, double timestamp)
+{
+    if (!system)
+    {
+        return false;
+    }
+    if (image.data)
+    {
+        cv::Mat pose;
+        Py_BEGIN_ALLOW_THREADS
+        pose = system->TrackMonocular(image, timestamp);
+        Py_END_ALLOW_THREADS
+        return !pose.empty();
+    }
+    else
+    {
+        return false;
+    }
+}'''
+
+assert old in content, "processMono body not found verbatim — bindings source may have changed; patch manually."
+content = content.replace(old, new)
+with open(path, "w") as f:
+    f.write(content)
+print("patched processMono to release the GIL around TrackMonocular.")
+EOF
+
 mkdir build && cd build
 # ORBSlamPython.cpp uses #include <ORB_SLAM2/KeyFrame.h>.
 # Headers live at ORB_SLAM2/include/KeyFrame.h (no prefix), so create the

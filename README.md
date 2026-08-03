@@ -209,6 +209,29 @@ nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
 ```
 
+##### Camera calibration
+
+`config/models/orbslam2_mono.yaml` ships with placeholder intrinsics (`fx=fy=700, cx=320, cy=240`,
+zero distortion). Monocular ORB-SLAM2's initialization is sensitive to these being close to
+correct — wrong values are a common reason it keeps rejecting its own initial map
+(`Wrong initialization, reseting...`). Calibrate against a printed checkerboard before your first
+`map slam` run:
+
+```bash
+# Runs on the Nano — needs the camera. Streams live corner detection over MJPEG so you
+# can position the board without a monitor attached.
+python tools/calibrate_camera.py
+python tools/calibrate_camera.py --board-cols 9 --board-rows 6 --samples 15  # defaults shown
+python tools/calibrate_camera.py --camera usb --stream-port 8090
+python tools/calibrate_camera.py --update-config   # back up + patch orbslam2_mono.yaml in place
+python tools/calibrate_camera.py --apply-from config/models/orbslam2_mono.calibrated.yaml
+                                                    # re-apply a previous result, no recapture
+```
+
+Open the printed stream URL, hold the checkerboard in view, press `c` to capture each sample
+(needs a detected board), and `q` when done to run the fit. See the script's docstring for the
+full step-by-step procedure and guidance on how many captures to take.
+
 ---
 
 ## Data Pipeline Tools
