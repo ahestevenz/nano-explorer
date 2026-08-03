@@ -203,7 +203,8 @@ class SlamMapper(CameraMotionMixIn):
 
                 traj_info = f"  poses={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
                 logger.debug(
-                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  state={label}{traj_info}"
+                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  "
+                    f"state={label}{traj_info}"
                 )
 
                 if self._config.stream and self._server is not None:
