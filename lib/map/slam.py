@@ -125,8 +125,11 @@ class SlamMapper(CameraMotionMixIn):
         return int(self._slam.get_tracking_state())
 
     def _get_trajectory(self) -> list:
+        # get_trajectory_points() returns plain nested Python lists, not numpy arrays —
+        # normalize here so every consumer can rely on numpy-style pose[0, 3] indexing
+        # (e.g. _last_pose_xz, _render_map_view) instead of each doing its own coercion.
         try:
-            return self._slam.get_trajectory_points()
+            return [np.asarray(pose) for pose in self._slam.get_trajectory_points()]
         except Exception:  # pylint: disable=broad-except
             return []
 
