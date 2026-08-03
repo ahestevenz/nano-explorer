@@ -68,6 +68,10 @@ class SlamMapper(CameraMotionMixIn):
         self._config = SlamConfig(**kwargs)
         self._backend = "orbslam2"
         self._slam = None
+        self._frame_idx = 0
+        self._run_start_ts = None
+        self._last_frame_ts = None
+        self._last_state_label = None
 
     def _load(self) -> None:
         import yaml
@@ -104,6 +108,11 @@ class SlamMapper(CameraMotionMixIn):
             )
         self._slam = orbslam2.System(vocab, settings, orbslam2.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
+        # System() only records the vocab/settings paths — initialize() is what actually
+        # loads the ORB vocabulary and starts tracking/mapping/loop-closing. Without this
+        # call process_image_mono() runs against a system that was never started, so the
+        # tracking state stays NO_IMAGES_YET forever regardless of what frames come in.
+        self._slam.initialize()
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
     def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
@@ -116,6 +125,14 @@ class SlamMapper(CameraMotionMixIn):
             return self._slam.get_trajectory_points()
         except Exception:  # pylint: disable=broad-except
             return []
+
+    @staticmethod
+    def _last_pose_xz(traj: list) -> str:
+        """Last (x, z) from the trajectory, formatted for logging, or '' if empty."""
+        if not traj:
+            return ""
+        pose = traj[-1]
+        return f"  pos=({pose[0, 3]:+.2f},{pose[2, 3]:+.2f})"
 
     def run(self) -> None:
         import time
@@ -135,17 +152,33 @@ class SlamMapper(CameraMotionMixIn):
         )
         logger.info(f"SLAM running — backend={self._backend}  " "(arrow keys to drive, q to stop)")
 
+        self._run_start_ts = time.time()
+
         try:
             while not _stop.is_set():
                 frame = cam.read()
                 ts = time.time()
+                dt = ts - self._last_frame_ts if self._last_frame_ts is not None else 0.0
+                self._last_frame_ts = ts
+                self._frame_idx += 1
 
                 state = self._process_frame_orbslam2(frame, ts)
                 label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
-                logger.debug(f"ORB-SLAM2 state={label}")
+                traj = self._get_trajectory()
+
+                if label != self._last_state_label:
+                    logger.info(
+                        f"ORB-SLAM2 state changed: {self._last_state_label} -> {label}  "
+                        f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s)"
+                    )
+                    self._last_state_label = label
+
+                logger.debug(
+                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  "
+                    f"state={label}  map_points={len(traj)}{self._last_pose_xz(traj)}"
+                )
 
                 if self._config.stream and self._server is not None:
-                    traj = self._get_trajectory()
                     h, w = frame.shape[:2]
                     scale = 2
                     self._push_frame(
