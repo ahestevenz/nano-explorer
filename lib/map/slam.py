@@ -125,21 +125,35 @@ class SlamMapper(CameraMotionMixIn):
         return int(self._slam.get_tracking_state())
 
     def _get_trajectory(self) -> list:
-        # get_trajectory_points() returns plain nested Python lists, not numpy arrays —
-        # normalize here so every consumer can rely on numpy-style pose[0, 3] indexing
-        # (e.g. _last_pose_xz, _render_map_view) instead of each doing its own coercion.
+        # get_trajectory_points() returns plain nested Python lists, not numpy arrays, and
+        # observed runtime output shows it's sometimes a flattened 16-element sequence
+        # rather than nested 4x4. Normalize both here so every consumer can rely on
+        # numpy-style pose[0, 3] indexing on an actual 4x4 array (_last_pose_xz,
+        # _render_map_view) instead of each guessing at the shape independently.
         try:
-            return [np.asarray(pose) for pose in self._slam.get_trajectory_points()]
+            poses = []
+            for raw in self._slam.get_trajectory_points():
+                pose = np.asarray(raw)
+                if pose.ndim == 1 and pose.size == 16:
+                    pose = pose.reshape(4, 4)
+                poses.append(pose)
+            return poses
         except Exception:  # pylint: disable=broad-except
             return []
 
     @staticmethod
     def _last_pose_xz(traj: list) -> str:
-        """Last (x, z) from the trajectory, formatted for logging, or '' if empty."""
+        """Last (x, z) from the trajectory, formatted for logging, or '' if unavailable."""
         if not traj:
             return ""
-        pose = traj[-1]
-        return f"  pos=({pose[0, 3]:+.2f},{pose[2, 3]:+.2f})"
+        # Defensive on top of _get_trajectory()'s own normalization: this is a debug-log
+        # convenience, not core tracking — an unexpected pose shape must never crash a
+        # working SLAM run over a nice-to-have log field.
+        try:
+            pose = traj[-1]
+            return f"  pos=({pose[0, 3]:+.2f},{pose[2, 3]:+.2f})"
+        except (IndexError, TypeError):
+            return ""
 
     def run(self) -> None:
         import time
