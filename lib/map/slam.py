@@ -164,18 +164,26 @@ class SlamMapper(CameraMotionMixIn):
 
                 state = self._process_frame_orbslam2(frame, ts)
                 label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
-                traj = self._get_trajectory()
 
-                if label != self._last_state_label:
+                # get_trajectory_points() walks the whole map and copies it into Python —
+                # not free, and it grows as the map does. Only pay for it on frames where
+                # it's actually used (a state change, or an active stream), not every frame.
+                state_changed = label != self._last_state_label
+                need_traj = state_changed or (self._config.stream and self._server is not None)
+                traj = self._get_trajectory() if need_traj else []
+
+                if state_changed:
                     logger.info(
                         f"ORB-SLAM2 state changed: {self._last_state_label} -> {label}  "
                         f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s)"
                     )
                     self._last_state_label = label
 
+                traj_info = (
+                    f"  map_points={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
+                )
                 logger.debug(
-                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  "
-                    f"state={label}  map_points={len(traj)}{self._last_pose_xz(traj)}"
+                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  state={label}{traj_info}"
                 )
 
                 if self._config.stream and self._server is not None:
