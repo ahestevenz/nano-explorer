@@ -40,10 +40,10 @@ _COLOR_RANGES = {
 
 _VALID_COLORS = list(_COLOR_RANGES.keys())
 _VALID_MODES = ["color", "blob", "object"]
-_KP = 0.4  # proportional steering gain
+_KP = 0.3  # proportional steering gain
 _MIN_AREA = 500
-_EMA_ALPHA = 0.4  # centroid smoothing — higher tracks faster, lower rides out mask jitter
-_LOST_GRACE_FRAMES = 5  # consecutive no-detection frames tolerated before really "lost"
+_EMA_ALPHA = 0.25  # centroid smoothing — higher tracks faster, lower rides out mask jitter
+_LOST_GRACE_FRAMES = 12  # consecutive no-detection frames tolerated before really "lost"
 _MAX_STEERING_DELTA = 0.15  # max steering change per frame — caps how hard one bad frame can swing
 
 
