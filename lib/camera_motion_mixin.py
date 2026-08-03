@@ -136,7 +136,10 @@ class CameraMotionMixIn:
             fd = sys.stdin.fileno()
             old = termios.tcgetattr(fd)
             try:
-                tty.setraw(fd)
+                # cbreak, not setraw: raw mode also disables OPOST, which stops the
+                # terminal from translating \n -> \r\n — every logger line written
+                # afterwards drifts one line further right (no carriage return).
+                tty.setcbreak(fd)
                 while not stop_event.is_set():
                     ready, _, _ = select.select([sys.stdin], [], [], 0.1)
                     if not ready:

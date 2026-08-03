@@ -127,6 +127,33 @@ nano-explorer vision gesture --stream-port PORT
 nano-explorer vision gesture --no-stream
 ```
 
+#### Recognised Gestures
+
+`vision gesture` doesn't run a dedicated gesture-recognition model — it feeds `trt_pose`
+skeleton keypoints (shoulders, wrists, hips) into a simple rule-based classifier
+(`lib/vision/gesture.py`). Only the **first detected person** is used, and only whole-arm
+position is considered — there's no hand/finger tracking, so gestures like a fist or a wave
+aren't recognised. Poses are described from the operator's point of view, facing the camera.
+
+Unlike the other vision commands above, gestures drive the motors directly, so arrow-key
+teleop isn't available here — press `q` (or Ctrl+C) to stop.
+
+| | | | | |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="doc/images/gestures/forward.svg" width="120"><br>**forward** | <img src="doc/images/gestures/backward.svg" width="120"><br>**backward** | <img src="doc/images/gestures/left.svg" width="120"><br>**turn left** | <img src="doc/images/gestures/right.svg" width="120"><br>**turn right** | <img src="doc/images/gestures/stop.svg" width="120"><br>**stop** |
+
+| Gesture | Rule (normalised keypoint coords) | Command |
+|---|---|---|
+| Both arms raised above shoulders | `wrist_y < shoulder_y - 0.05` (both sides) | `forward` |
+| Both arms lowered below hips | `wrist_y > hip_y + 0.05` (both sides) | `backward` |
+| Left arm extended out to the side | left wrist left of left shoulder, right arm relaxed | `left` (turn) |
+| Right arm extended out to the side | right wrist right of right shoulder, left arm relaxed | `right` (turn) |
+| T-pose — both arms level with shoulders | `abs(wrist_y - shoulder_y) < 0.05` (both sides) | `stop` |
+| No person, or keypoints not visible | — | `stop` |
+
+A gesture is re-evaluated every frame with no debounce/hold, so a pose that flickers between
+two states will flicker the motor command too.
+
 ### Navigation & Mapping (Experimental)
 
 Stream is **on by default** for all commands. Arrow keys drive the robot while the command runs; press `q` to stop.
