@@ -433,5 +433,9 @@ class TeleopController(CameraMotionMixIn):
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
-        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}\r\n")
+        # left/right send turn_speed (speed * turn_gain) to the motors, not the raw
+        # linear speed — log the value actually applied, not always self._config.speed,
+        # so this line can be trusted when debugging speed/turn-gain settings.
+        applied_speed = turn_speed if action in ("left", "right") else self._config.speed
+        sys.stdout.write(f"\r[teleop] {action:<10}  speed={applied_speed:.2f}\r\n")
         sys.stdout.flush()
