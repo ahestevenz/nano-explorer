@@ -75,6 +75,26 @@ nano-explorer motion collision --stream-port PORT
 nano-explorer motion collision --no-stream
 ```
 
+#### Motor calibration
+
+Cheap DC gear motors commonly differ 5-15% in actual speed at the same commanded value, even
+between two units of the same model — `lib/motor.py` sends both wheels the same speed with no
+compensation, so this shows up as the robot arcing to one side when told to drive straight.
+Calibrate a per-wheel power trim to fix it:
+
+```bash
+python tools/calibrate_motors.py
+python tools/calibrate_motors.py --speed 0.3 --duration 1.5   # defaults shown
+python tools/calibrate_motors.py --step 0.02                  # initial trim nudge per key press
+```
+
+Press `f` (or space) to run a forward test, then the arrow key matching the direction it
+drifted (left arrow = drifted left, right arrow = drifted right) to nudge the trim, and repeat
+until it drives straight. Press `s` to save — writes `NANO_MOTOR_LEFT_TRIM` /
+`NANO_MOTOR_RIGHT_TRIM` to `~/.nano-explorer.env` (backing up any existing file first), which
+every command using `MotorController` then picks up automatically. See the script's docstring
+for the full control list and procedure.
+
 ### Computer Vision & Detection
 
 All vision commands stream the annotated feed (**on by default**) and allow driving the robot
@@ -236,126 +256,15 @@ full step-by-step procedure and guidance on how many captures to take.
 
 ## Data Pipeline Tools
 
-Scripts in `tools/` run **on your laptop** (or any machine with PyTorch + torchvision installed) to collect training data and train models that are then copied to the Nano.
+Data collection and training scripts for nano-explorer's ML models (collision avoidance,
+road following) now live in a separate repo:
+[nano-explorer-ml-tools](https://github.com/ahestevenz/nano-explorer-ml-tools).
 
-### Collect collision-avoidance data
-
-Drive the robot into position, then snapshot frames labelled **free** or **blocked**.
-
-```bash
-python tools/collect_collision_data.py --out datasets/collision_001
-
-# Options
-#   --speed        Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
-#   --camera       csi | usb                   (default: csi)
-#   --stream       Enable MJPEG stream         (default: off)
-#   --stream-port  MJPEG server port           (default: 8080)
-
-# With live preview in browser
-python tools/collect_collision_data.py --out datasets/collision_001 --stream
-```
-
-**Key bindings while running:**
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓ ← →` | Drive the robot |
-| `f` | Capture frame → `free/` |
-| `b` | Capture frame → `blocked/` |
-| `q` / Ctrl-C | Quit |
-
-Output layout:
-```
-datasets/collision_001/
-  free/
-    img_000001.jpg …
-  blocked/
-    img_000001.jpg …
-```
-
-Resuming is automatic — re-running the same `--out` path picks up where you left off.
-
----
-
-### Train the collision-avoidance model
-
-```bash
-python tools/train_collision_avoidance.py --dataset datasets/collision_001
-
-# Options
-#   --output     Output .pth path  (default: assets/models/collision_avoidance.pth)
-#   --epochs     Training epochs   (default: 15)
-#   --lr         Learning rate     (default: 1e-4)
-#   --batch-size Mini-batch size   (default: 32)
-#   --val-split  Validation ratio  (default: 0.15)
-#   --seed       Random seed       (default: 42)
-```
-
-Trains a **ResNet18 binary classifier** (`free=0`, `blocked=1`).
-Best checkpoint (highest val accuracy) is saved automatically.
-The saved weights are loaded by `nano-explorer nav collision-avoid`.
-
----
-
-### Collect road-following data
-
-Drive the robot along the track while frames are captured at a fixed rate and labelled with the current steering angle.
-
-```bash
-python tools/collect_road_data.py --out datasets/road_001
-
-# Options
-#   --speed        Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
-#   --fps          Frame capture rate (Hz)     (default: 10)
-#   --camera       csi | usb                   (default: csi)
-#   --stream       Enable MJPEG stream         (default: off)
-#   --stream-port  MJPEG server port           (default: 8080)
-
-# With live preview in browser
-python tools/collect_road_data.py --out datasets/road_001 --stream
-```
-
-**Key bindings while running:**
-
-| Key | Steering angle saved |
-|-----|---------------------|
-| `↑` | `0.0` (straight) |
-| `←` | `-1.0` (full left) |
-| `→` | `+1.0` (full right) |
-| `q` / Ctrl-C | Quit |
-
-Frames are only written while a key is **held** (robot moving). Reverse (`↓`) is ignored.
-
-Output layout:
-```
-datasets/road_001/
-  labels.csv        # filename,angle
-  img_000001.jpg …
-```
-
-Appends to an existing `labels.csv` so sessions can be resumed.
-
----
-
-### Train the road-following model
-
-```bash
-python tools/train_road_follower.py --dataset datasets/road_001
-
-# Options
-#   --output     Output .pth path  (default: assets/models/road_follower.pth)
-#   --epochs     Training epochs   (default: 20)
-#   --lr         Learning rate     (default: 1e-4)
-#   --batch-size Mini-batch size   (default: 32)
-#   --val-split  Validation ratio  (default: 0.15)
-#   --seed       Random seed       (default: 42)
-```
-
-Trains a **ResNet18 regression model** (single output: steering angle ∈ [-1, 1]).
-Best checkpoint (lowest val MSE loss) is saved automatically.
-The saved weights are loaded by `nano-explorer nav road-follow`.
+Training scripts there are portable (any machine with PyTorch); collection scripts drive
+the physical robot, so they need nano-explorer installed editable in the same environment
+(`pip install -e /path/to/nano-explorer`) and must run on the Nano. See that repo's README
+for full usage. Trained `.pth` files get copied into this repo's `assets/models/` (or pointed
+at directly via `--model` / the relevant `NANO_*_MODEL_PATH` env var) once ready.
 
 ---
 
