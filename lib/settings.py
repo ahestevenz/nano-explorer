@@ -32,6 +32,12 @@ class NanoSettings(BaseSettings):  # pylint: disable = no-name-in-module
     collision_model_hf_filename: str = DEFAULT_COLLISION_MODEL_HF_FILENAME
     collision_model_hf_revision: str = DEFAULT_COLLISION_MODEL_HF_REVISION
     collision_threshold: float = Field(0.6, ge=0.0, le=1.0)
+    # Per-wheel power trim — corrects forward-drift from motor manufacturing
+    # variance. Multiplicative, applied via jetbot.Robot's left/right_motor_alpha,
+    # so it can only ever scale a commanded speed down, never above what was
+    # requested. 1.0 = no correction. See tools/calibrate_motors.py.
+    motor_left_trim: float = Field(1.0, gt=0.0, le=1.0)
+    motor_right_trim: float = Field(1.0, gt=0.0, le=1.0)
     camera_source: str = "csi"
     camera_device_id: int = Field(0, ge=0)
 

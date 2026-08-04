@@ -62,6 +62,8 @@ except ImportError:
 
 from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
 
+from lib.settings import NanoSettings
+
 
 class WheelSpeeds(BaseModel):
     left: float = Field(..., ge=-1.0, le=1.0)
@@ -75,19 +77,44 @@ class MotorController:
     All speed values are floats in [0.0, 1.0].
     In DRY-RUN mode (jetbot not installed) every call is logged but
     no hardware is touched.
+
+    Args:
+        left_trim:  Per-wheel power trim [0.0, 1.0], applied via jetbot's
+                    left_motor_alpha. Defaults to NanoSettings().motor_left_trim
+                    (1.0 = no correction) if not given. See tools/calibrate_motors.py.
+        right_trim: Same, for the right wheel.
     """
 
-    def __init__(self):
+    def __init__(self, left_trim: float = None, right_trim: float = None):
         self._robot = None
         self._dry_run = not _HW_AVAILABLE
+        settings = NanoSettings()
+        self._left_trim = settings.motor_left_trim if left_trim is None else left_trim
+        self._right_trim = settings.motor_right_trim if right_trim is None else right_trim
 
     def open(self) -> None:
         """Initialise the JetBot Robot instance."""
         if self._dry_run:
             logger.warning("DRY-RUN: MotorController.open() skipped.")
             return
-        self._robot = InvertedRobot()
-        logger.success("MotorController ready (jetbot.Robot)")
+        self._robot = InvertedRobot(
+            left_motor_alpha=self._left_trim, right_motor_alpha=self._right_trim
+        )
+        logger.success(
+            f"MotorController ready (jetbot.Robot)  "
+            f"trim: left={self._left_trim:.3f}  right={self._right_trim:.3f}"
+        )
+
+    def set_trim(self, left_trim: float, right_trim: float) -> None:
+        """Update per-wheel power trim live — takes effect on the next motor command."""
+        self._left_trim = left_trim
+        self._right_trim = right_trim
+        if self._dry_run:
+            logger.debug(f"DRY-RUN set_trim: left={left_trim:.3f}  right={right_trim:.3f}")
+            return
+        if self._robot is not None:
+            self._robot.left_motor.alpha = left_trim
+            self._robot.right_motor.alpha = right_trim
 
     def close(self) -> None:
         """Stop motors and release the Robot instance."""
