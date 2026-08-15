@@ -94,19 +94,23 @@ class SlamMapper(CameraMotionMixIn):
                 "Build from: https://github.com/raulmur/ORB_SLAM2"
             ) from e
 
-        vocab = cfg.get("vocabulary", "assets/models/ORBvoc.txt")
-        if not Path(vocab).exists():
+        vocab = Path(cfg.get("vocabulary", "assets/models/ORBvoc.txt"))
+        if not vocab.is_absolute():
+            vocab = PROJECT_ROOT_PATH / vocab
+        if not vocab.exists():
             raise FileNotFoundError(
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        settings = cfg.get("settings", "config/models/orbslam2_mono.yaml")
-        if not Path(settings).exists():
+        settings = Path(cfg.get("settings", "config/models/orbslam2_mono.yaml"))
+        if not settings.is_absolute():
+            settings = PROJECT_ROOT_PATH / settings
+        if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM2 settings not found: {settings}\n"
                 "Create camera calibration YAML at config/models/orbslam2_mono.yaml"
             )
-        self._slam = orbslam2.System(vocab, settings, orbslam2.Sensor.MONOCULAR)
+        self._slam = orbslam2.System(str(vocab), str(settings), orbslam2.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
         # System() only records the vocab/settings paths — initialize() is what actually
         # loads the ORB vocabulary and starts tracking/mapping/loop-closing. Without this
