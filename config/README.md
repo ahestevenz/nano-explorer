@@ -21,6 +21,15 @@ model:      # Model name string or path to weights file
 threshold:  # Confidence cutoff [0.0–1.0]
 ```
 
+## config/motors/
+
+| File         | Used by command                          | Purpose |
+|--------------|-------------------------------------------|---------|
+| `trim.yaml`  | every command that drives the motors       | Per-wheel power trim (`left_trim`/`right_trim`, 1.0 = no correction) |
+
+Written by `tools/calibrate_motors.py`; see that script's docstring for the calibration
+procedure. Safe to edit by hand too — just two floats.
+
 ## config/slam/
 
 | File                  | Purpose |

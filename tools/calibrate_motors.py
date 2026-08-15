@@ -7,8 +7,8 @@ commanded value, even between two units of the exact same model, due to
 manufacturing tolerance, gearbox friction, and wheel/tire differences.
 lib/motor.py sends both wheels the same commanded speed with no
 compensation, so this shows up as the robot arcing to one side when told
-to drive straight. This tool finds a left/right trim multiplier
-(NANO_MOTOR_LEFT_TRIM / NANO_MOTOR_RIGHT_TRIM) that corrects it.
+to drive straight. This tool finds a left/right trim multiplier, written
+to config/motors/trim.yaml, that corrects it.
 
 Trim only ever reduces the stronger wheel's power (each trim stays in
 (0.0, 1.0]) — it can't push a wheel past what was actually commanded,
@@ -67,25 +67,36 @@ Procedure
   4. Press ENTER to run a test drive (forward at --speed for --duration).
   5. Once it stops, measure with a tape measure and enter when prompted:
        - forward distance travelled along the reference line, in cm
-       - how far off the line it ended up, and to which side
+       - how far off the line it ended up, and to which side — judged from
+         where you STARTED, watching it drive away (same frame as the
+         teleop arrow keys), not from wherever you are after walking up
+         to it to measure — that view is mirrored left/right
   6. The tool computes and applies the corrected trim from those numbers.
   7. Press ENTER again to run a verification drive with the new trim — it
      should track much closer to the line now. Repeat steps 5-7 once more
      if you want to refine it further (each round corrects the residual
      drift from whatever trim was active during that drive, so it's safe
      to keep going from wherever you left off).
-  8. Press 's' + ENTER to save. This writes NANO_MOTOR_LEFT_TRIM /
-     NANO_MOTOR_RIGHT_TRIM to ~/.nano-explorer.env (backing up any existing
-     file first), so every command that builds a MotorController picks up
-     the correction automatically. Press 'q' + ENTER at any point to quit
-     without saving.
+  8. Press 's' + ENTER to save. This writes left_trim/right_trim to
+     config/motors/trim.yaml (backing up any existing file first), so every
+     command that builds a MotorController picks up the correction
+     automatically. Press 'q' + ENTER at any point to quit without saving.
 
 Note: this starts from whatever trim is currently saved in
-~/.nano-explorer.env (printed at startup), not a clean 1.0/1.0 — a
+config/motors/trim.yaml (printed at startup), not a clean 1.0/1.0 — a
 refinement measurement composes correctly on top of an existing
 calibration, so there's no need to redo it from scratch. To start over
-from an unmodified baseline instead, remove or comment out
-NANO_MOTOR_LEFT_TRIM / NANO_MOTOR_RIGHT_TRIM in that file first.
+from an unmodified baseline instead, set both values back to 1.0 in that
+file first.
+
+Trim used to live in ~/.nano-explorer.env (NANO_MOTOR_LEFT_TRIM /
+NANO_MOTOR_RIGHT_TRIM), read via pydantic's BaseSettings. That was dropped
+because a real (exported) shell env var silently overrides a same-named
+.env file entry there — env vars are merged in over the .env file's
+values, not the reverse — so a stale export from an earlier debugging
+session could shadow a freshly-calibrated value with no indication
+anything was wrong. A plain YAML file read directly has no such hidden
+precedence.
 """
 
 import argparse
@@ -96,8 +107,6 @@ from pathlib import Path
 from typing import Tuple
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
-
-_ENV_FILE = Path.home() / ".nano-explorer.env"
 
 # A real motor pair rarely differs by more than 2x — this catches measurement
 # typos (wrong units, swapped digits) rather than genuine motor mismatch.
@@ -149,6 +158,12 @@ def _prompt_float(prompt: str) -> float:
 
 
 def _prompt_lateral_cm() -> float:
+    print(
+        "  Judge left/right from where you started, watching it drive away from you —\n"
+        "  NOT from wherever you're standing now if you've already walked up to measure.\n"
+        "  (Same frame as the teleop arrow keys: your left/right while facing the way\n"
+        "  it drove, not the mirror-image view you'd get facing back toward the start.)"
+    )
     while True:
         side = input("  Which side did it drift toward? [l]eft / [r]ight / [s]traight: ")
         side = side.strip().lower()
@@ -168,47 +183,42 @@ def _run_test_drive(controller, speed: float, duration: float) -> None:
     print("[calibrate-motors] stopped — go measure.")
 
 
-def _write_env_trim(left_trim: float, right_trim: float) -> None:
-    """Set NANO_MOTOR_LEFT_TRIM/RIGHT_TRIM in _ENV_FILE, preserving any other lines."""
-    lines = []
-    if _ENV_FILE.exists():
-        original = _ENV_FILE.read_text(encoding="utf-8")
-        backup = _ENV_FILE.with_name(
-            f"{_ENV_FILE.name}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        )
-        backup.write_text(original, encoding="utf-8")
-        print(f"[calibrate-motors] Backed up existing env file to {backup}")
-        lines = original.splitlines()
+def _write_trim_yaml(path: Path, left_trim: float, right_trim: float) -> None:
+    """Write left_trim/right_trim to the YAML trim config, backing up any existing file first."""
+    if path.exists():
+        backup = path.with_name(f"{path.name}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"[calibrate-motors] Backed up existing trim config to {backup}")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    updates = {
-        "NANO_MOTOR_LEFT_TRIM": f"{left_trim:.4f}",
-        "NANO_MOTOR_RIGHT_TRIM": f"{right_trim:.4f}",
-    }
-    seen = set()
-    for i, line in enumerate(lines):
-        key = line.split("=", 1)[0].strip() if "=" in line else None
-        if key in updates:
-            lines[i] = f"{key}={updates[key]}"
-            seen.add(key)
-    for key, value in updates.items():
-        if key not in seen:
-            lines.append(f"{key}={value}")
-
-    _ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"[calibrate-motors] Wrote {_ENV_FILE}")
+    path.write_text(
+        "# Per-wheel power trim — corrects forward-drift caused by motor manufacturing\n"
+        "# variance. Multiplicative, applied via jetbot.Robot's left/right_motor_alpha,\n"
+        "# so it can only ever scale a commanded speed down, never above what was\n"
+        "# requested. 1.0 = no correction.\n"
+        "#\n"
+        "# Written by tools/calibrate_motors.py — see that script's docstring for the\n"
+        "# calibration procedure. Safe to edit by hand too.\n"
+        f"left_trim: {left_trim:.4f}\n"
+        f"right_trim: {right_trim:.4f}\n",
+        encoding="utf-8",
+    )
+    print(f"[calibrate-motors] Wrote {path}")
 
 
 def calibrate(speed: float, duration: float, wheelbase: float) -> None:
-    from lib.motor import MotorController
+    from lib.motor import MotorController, _load_trim
     from lib.settings import NanoSettings
 
-    # Build on whatever is already saved (NanoSettings reads the same
-    # ~/.nano-explorer.env that _write_env_trim writes to) instead of
+    trim_path = NanoSettings().motor_trim_config_path
+
+    # Build on whatever is already saved (_load_trim reads the same
+    # config/motors/trim.yaml that _write_trim_yaml writes to) instead of
     # discarding it — the ratio math below rescales by whatever trim was
     # active during a given test drive, so starting from a prior
     # calibration composes correctly rather than needing a from-scratch redo.
-    saved = NanoSettings()
-    left_trim, right_trim = saved.motor_left_trim, saved.motor_right_trim
+    left_trim, right_trim = _load_trim()
 
     controller = MotorController(left_trim=left_trim, right_trim=right_trim)
     controller.open()
@@ -217,7 +227,7 @@ def calibrate(speed: float, duration: float, wheelbase: float) -> None:
     print(
         f"\n[calibrate-motors] wheelbase={wheelbase:.2f}cm  speed={speed:.2f}  "
         f"test duration={duration:.1f}s\n"
-        f"[calibrate-motors] starting trim (from ~/.nano-explorer.env): "
+        f"[calibrate-motors] starting trim (from {trim_path}): "
         f"left={left_trim:.3f}  right={right_trim:.3f}\n"
         "[calibrate-motors] Mark a straight reference line on the floor and place the "
         "robot's center at the start, facing along it."
@@ -271,7 +281,7 @@ def calibrate(speed: float, duration: float, wheelbase: float) -> None:
 
     if save:
         print(f"[calibrate-motors] Final trim: left={left_trim:.3f}  right={right_trim:.3f}")
-        _write_env_trim(left_trim, right_trim)
+        _write_trim_yaml(trim_path, left_trim, right_trim)
     else:
         print("[calibrate-motors] Quit without saving.")
 

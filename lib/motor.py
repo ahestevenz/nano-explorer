@@ -60,9 +60,29 @@ except ImportError:
     )
 
 
+from typing import Tuple
+
+import yaml
 from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
 
 from lib.settings import NanoSettings
+
+
+def _load_trim() -> Tuple[float, float]:
+    """
+    Read (left_trim, right_trim) from NanoSettings().motor_trim_config_path,
+    defaulting to (1.0, 1.0) if the file doesn't exist yet. Deliberately a
+    plain YAML read, not a pydantic env-settings field — a real (exported)
+    shell env var silently overrides a same-named .env file entry, which
+    made a stale export indistinguishable from a freshly-calibrated value.
+    See tools/calibrate_motors.py and config/motors/trim.yaml.
+    """
+    path = NanoSettings().motor_trim_config_path
+    if not path.exists():
+        return 1.0, 1.0
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    return float(cfg.get("left_trim", 1.0)), float(cfg.get("right_trim", 1.0))
 
 
 class WheelSpeeds(BaseModel):
@@ -80,17 +100,18 @@ class MotorController:
 
     Args:
         left_trim:  Per-wheel power trim [0.0, 1.0], applied via jetbot's
-                    left_motor_alpha. Defaults to NanoSettings().motor_left_trim
-                    (1.0 = no correction) if not given. See tools/calibrate_motors.py.
+                    left_motor_alpha. Defaults to the value in
+                    config/motors/trim.yaml (1.0 = no correction) if not
+                    given. See tools/calibrate_motors.py.
         right_trim: Same, for the right wheel.
     """
 
     def __init__(self, left_trim: float = None, right_trim: float = None):
         self._robot = None
         self._dry_run = not _HW_AVAILABLE
-        settings = NanoSettings()
-        self._left_trim = settings.motor_left_trim if left_trim is None else left_trim
-        self._right_trim = settings.motor_right_trim if right_trim is None else right_trim
+        default_left, default_right = _load_trim()
+        self._left_trim = default_left if left_trim is None else left_trim
+        self._right_trim = default_right if right_trim is None else right_trim
 
     def open(self) -> None:
         """Initialise the JetBot Robot instance."""

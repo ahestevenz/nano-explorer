@@ -102,14 +102,20 @@ trim correction directly from differential-drive kinematics — no guessing, and
    clear space ahead, and place the robot's center at one end, facing along it.
 2. Press ENTER to run a test drive (forward at `--speed` for `--duration`).
 3. Once it stops, measure with a tape measure and enter when prompted: how far forward it
-   travelled along the line, and how far off the line it ended up (and to which side).
+   travelled along the line, and how far off the line it ended up (and to which side — judged
+   from where you *started*, watching it drive away, same frame as the teleop arrow keys; not
+   from wherever you're standing after walking up to it to measure, which is mirrored).
 4. The tool computes and applies the corrected trim from those two numbers.
 5. Press ENTER again to run a verification drive with the new trim — it should track much
    closer to the line now. Repeat steps 3-5 once more to refine further if needed.
-6. Press `s` + ENTER to save — writes `NANO_MOTOR_LEFT_TRIM` / `NANO_MOTOR_RIGHT_TRIM` to
-   `~/.nano-explorer.env` (backing up any existing file first), which every command using
-   `MotorController` then picks up automatically. Press `q` + ENTER at any point to quit
-   without saving.
+6. Press `s` + ENTER to save — writes `left_trim` / `right_trim` to `config/motors/trim.yaml`
+   (backing up any existing file first), which every command using `MotorController` then picks
+   up automatically. Press `q` + ENTER at any point to quit without saving.
+
+Trim lives in `config/motors/trim.yaml`, not `~/.nano-explorer.env` — a real (exported) shell
+env var silently overrides a same-named `.env` file entry in pydantic's `BaseSettings`, which
+made a stale export from an earlier debugging session indistinguishable from a freshly
+calibrated value. A plain YAML file read directly has no such hidden precedence.
 
 See the script's docstring for the kinematics derivation and the small-angle approximation it
 relies on.
