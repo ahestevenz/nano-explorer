@@ -23,7 +23,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.settings import PROJECT_ROOT_PATH
+from lib.settings import PROJECT_ROOT_PATH, ensure_user_config, user_config_path
 
 _VALID_BACKENDS = ["orbslam2"]
 
@@ -51,15 +51,16 @@ class SlamConfig(BaseModel):
         turn_gain:    Turn gain [0.0, 1.0].
     """
 
-    config_path: Path = PROJECT_ROOT_PATH / "config/models/slam.yaml"
+    config_path: Path = user_config_path("models/slam.yaml")
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
-    @validator("config_path")
+    @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
-        if not Path(v).exists():
+        v = ensure_user_config(v)
+        if not v.exists():
             raise ValueError(f"SLAM config not found: {v}\n" "Expected at: config/models/slam.yaml")
         return v
 
@@ -112,9 +113,20 @@ class SlamMapper(CameraMotionMixIn):
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        settings = Path(cfg.get("settings", "config/models/orbslam2_mono.yaml"))
+        settings_rel = cfg.get("settings", "config/models/orbslam2_mono.yaml")
+        settings = Path(settings_rel)
         if not settings.is_absolute():
-            settings = PROJECT_ROOT_PATH / settings
+            # This one's a config/*.yaml file (camera calibration), not an
+            # assets/ blob like vocab above — route it through the same
+            # user-config seeding as every other config_path, so a hand-tuned
+            # calibration survives a package upgrade. Anything relative but
+            # NOT rooted at "config/" (a custom path someone set explicitly)
+            # falls back to plain PROJECT_ROOT_PATH anchoring.
+            settings = (
+                ensure_user_config(user_config_path(settings_rel[len("config/") :]))
+                if settings_rel.startswith("config/")
+                else PROJECT_ROOT_PATH / settings
+            )
         if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM2 settings not found: {settings}\n"

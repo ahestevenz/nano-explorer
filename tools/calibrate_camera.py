@@ -2,12 +2,16 @@
 """
 Calibrate the JetBot's camera intrinsics with a checkerboard, for ORB-SLAM2.
 
-config/models/orbslam2_mono.yaml ships with placeholder intrinsics
-(fx=fy=700, cx=320, cy=240, zero distortion) — monocular ORB-SLAM2's
+~/.nano-explorer/config/models/orbslam2_mono.yaml (seeded on first use from
+the package's bundled config/models/orbslam2_mono.yaml, which ships with
+placeholder intrinsics: fx=fy=700, cx=320, cy=240, zero distortion) is the
+file lib/map/slam.py actually reads at runtime. Monocular ORB-SLAM2's
 initialization is quite sensitive to these being right, and wrong values
 are a common reason it keeps rejecting its own initial map ("Wrong
 initialization, reseting..."). This runs a standard OpenCV chessboard
-calibration and writes real fx/fy/cx/cy/k1/k2/p1/p2 back into that file.
+calibration and writes real fx/fy/cx/cy/k1/k2/p1/p2 back into that live
+config — never into the package's own bundled copy, which SLAM stops
+reading after the first run seeds the user copy.
 
 Print any standard OpenCV chessboard pattern (e.g. the 9x6-inner-corner
 one from https://github.com/opencv/opencv/blob/4.x/doc/pattern.png),
@@ -44,30 +48,40 @@ Procedure
   5. Press q (or Ctrl-C) once you've captured enough samples — this stops
      capturing and runs the fit.
   6. Check the printed mean reprojection error, then either copy the
-     written config/models/orbslam2_mono.calibrated.yaml over
-     config/models/orbslam2_mono.yaml yourself, or re-run with
-     --update-config to have it back up the current config and apply the
-     new values automatically.
+     written ~/.nano-explorer/config/models/orbslam2_mono.calibrated.yaml
+     over ~/.nano-explorer/config/models/orbslam2_mono.yaml yourself, or
+     re-run with --update-config to have it back up the current config and
+     apply the new values automatically.
 
 Applying a result you already have (no recapture)
 ---------------------------------------------------
-  python tools/calibrate_camera.py --apply-from config/models/orbslam2_mono.calibrated.yaml
+  python tools/calibrate_camera.py --apply-from ~/.nano-explorer/config/models/orbslam2_mono.calibrated.yaml
 Reads the Camera.* values out of that file and patches the live config
 (with a timestamped backup), skipping the camera/checkerboard step
 entirely. Useful after a run you didn't pass --update-config to at the
 time, or to re-apply an older calibration you'd saved off.
 """
 
-import argparse
 import os
+
+os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
+
+import argparse
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
+from lib.settings import ensure_user_config, user_config_path
 
-_ORBSLAM2_CONFIG = Path(__file__).resolve().parent.parent / "config/models/orbslam2_mono.yaml"
+# Pure path arithmetic (no I/O) — this is the same ~/.nano-explorer/config/...
+# file lib/map/slam.py actually reads at runtime. Seeded on demand via
+# ensure_user_config() right before each read/write below, not eagerly here,
+# so e.g. --help doesn't trigger a copy. Patching the package's own bundled
+# config/models/orbslam2_mono.yaml here instead would be silently pointless
+# once SLAM has run once and seeded its own copy — this tool would keep
+# reporting success while the file SLAM actually loads stays untouched.
+_ORBSLAM2_CONFIG = user_config_path("models/orbslam2_mono.yaml")
 _MIN_SAMPLES = 5  # calibrateCamera will run below --samples, but not below this
 
 
@@ -220,13 +234,14 @@ def _print_values(values: dict) -> None:
 
 def _backup_and_apply(values: dict) -> None:
     """Patch _ORBSLAM2_CONFIG's Camera.* block with values, after backing up the original."""
-    original = _ORBSLAM2_CONFIG.read_text(encoding="utf-8")
+    config = ensure_user_config(_ORBSLAM2_CONFIG)
+    original = config.read_text(encoding="utf-8")
     patched = _patch_camera_block(original, values)
-    backup = _ORBSLAM2_CONFIG.with_suffix(f".yaml.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    backup = config.with_suffix(f".yaml.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
     backup.write_text(original, encoding="utf-8")
-    _ORBSLAM2_CONFIG.write_text(patched, encoding="utf-8")
+    config.write_text(patched, encoding="utf-8")
     print(f"[calibrate] Backed up previous config to {backup}")
-    print(f"[calibrate] Updated {_ORBSLAM2_CONFIG} in place")
+    print(f"[calibrate] Updated {config} in place")
 
 
 def apply_from(path: Path) -> None:
@@ -296,7 +311,7 @@ def calibrate(
     )
     _print_values(values)
 
-    original = _ORBSLAM2_CONFIG.read_text(encoding="utf-8")
+    original = ensure_user_config(_ORBSLAM2_CONFIG).read_text(encoding="utf-8")
     patched = _patch_camera_block(original, values)
     out_path.write_text(patched, encoding="utf-8")
     print(f"[calibrate] Wrote {out_path}")

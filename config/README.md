@@ -1,8 +1,17 @@
 # Configuration Files
 
-All runtime configuration lives here. Edit these YAML files to select
-models, tune thresholds, and adjust camera parameters — no source code
-changes needed.
+The YAML files under this directory are **bundled defaults**, shipped with the package. The
+CLI never reads or writes them directly at runtime — the first time any command actually needs
+a given config file, it's copied to `~/.nano-explorer/config/` (same relative layout, e.g.
+`config/models/slam.yaml` → `~/.nano-explorer/config/models/slam.yaml`), and every command reads
+and writes that copy from then on. This is what you should actually edit to select models, tune
+thresholds, adjust camera parameters, or store a calibrated motor trim.
+
+The split exists so a `pip install --upgrade` — which only ever touches the installed package's
+own copy of this directory — can never silently wipe something you tuned or calibrated. Once a
+file has been seeded into `~/.nano-explorer/config/`, it's never overwritten automatically; only
+a missing file triggers a (one-time) copy. See `lib/settings.py`'s `user_config_path()` /
+`ensure_user_config()` for the mechanism.
 
 ## config/models/
 

@@ -108,14 +108,18 @@ trim correction directly from differential-drive kinematics — no guessing, and
 4. The tool computes and applies the corrected trim from those two numbers.
 5. Press ENTER again to run a verification drive with the new trim — it should track much
    closer to the line now. Repeat steps 3-5 once more to refine further if needed.
-6. Press `s` + ENTER to save — writes `left_trim` / `right_trim` to `config/motors/trim.yaml`
-   (backing up any existing file first), which every command using `MotorController` then picks
-   up automatically. Press `q` + ENTER at any point to quit without saving.
+6. Press `s` + ENTER to save — writes `left_trim` / `right_trim` to
+   `~/.nano-explorer/config/motors/trim.yaml` (backing up any existing file first), which every
+   command using `MotorController` then picks up automatically. Press `q` + ENTER at any point
+   to quit without saving.
 
-Trim lives in `config/motors/trim.yaml`, not `~/.nano-explorer.env` — a real (exported) shell
-env var silently overrides a same-named `.env` file entry in pydantic's `BaseSettings`, which
-made a stale export from an earlier debugging session indistinguishable from a freshly
-calibrated value. A plain YAML file read directly has no such hidden precedence.
+Trim lives in `~/.nano-explorer/config/motors/trim.yaml`, not `~/.nano-explorer.env` — a real
+(exported) shell env var silently overrides a same-named `.env` file entry in pydantic's
+`BaseSettings`, which made a stale export from an earlier debugging session indistinguishable
+from a freshly calibrated value. A plain YAML file read directly has no such hidden precedence.
+It also isn't the package's own bundled `config/motors/trim.yaml` — that's just the default
+copied into `~/.nano-explorer/config/` the first time it's needed, so a `pip install --upgrade`
+can never wipe a calibrated trim. See `config/README.md` for the full mechanism.
 
 See the script's docstring for the kinematics derivation and the small-angle approximation it
 relies on.
@@ -128,7 +132,7 @@ with arrow keys simultaneously. Pass `--no-stream` to disable the stream.
 ```bash
 # Object detection (jetson-inference or OpenCV DNN)
 nano-explorer vision detect
-nano-explorer vision detect --config YAML              # model config (default: config/models/detection.yaml)
+nano-explorer vision detect --config YAML              # model config (default: ~/.nano-explorer/config/models/detection.yaml)
 nano-explorer vision detect --threshold T              # confidence threshold (default: 0.5)
 nano-explorer vision detect --speed SPEED --turn-gain GAIN
 nano-explorer vision detect --stream-port PORT
@@ -136,7 +140,7 @@ nano-explorer vision detect --no-stream
 
 # Face and people detection
 nano-explorer vision faces
-nano-explorer vision faces --config YAML               # model config (default: config/models/face.yaml)
+nano-explorer vision faces --config YAML               # model config (default: ~/.nano-explorer/config/models/face.yaml)
 nano-explorer vision faces --speed SPEED --turn-gain GAIN
 nano-explorer vision faces --stream-port PORT
 nano-explorer vision faces --no-stream
@@ -152,14 +156,14 @@ nano-explorer vision track --no-stream
 
 # Semantic segmentation (jetson-inference segNet)
 nano-explorer vision segment
-nano-explorer vision segment --config YAML             # model config (default: config/models/segmentation.yaml)
+nano-explorer vision segment --config YAML             # model config (default: ~/.nano-explorer/config/models/segmentation.yaml)
 nano-explorer vision segment --speed SPEED --turn-gain GAIN
 nano-explorer vision segment --stream-port PORT
 nano-explorer vision segment --no-stream
 
 # Human pose estimation (trt_pose)
 nano-explorer vision pose
-nano-explorer vision pose --config YAML                # model config (default: config/models/pose.yaml)
+nano-explorer vision pose --config YAML                # model config (default: ~/.nano-explorer/config/models/pose.yaml)
 nano-explorer vision pose --speed SPEED --turn-gain GAIN
 nano-explorer vision pose --stream-port PORT
 nano-explorer vision pose --no-stream
@@ -208,7 +212,7 @@ Stream is **on by default** for all commands. Arrow keys drive the robot while t
 ```bash
 # Colour-line following (classical HSV threshold)
 nano-explorer nav line-follow
-nano-explorer nav line-follow --config YAML            # config (default: config/models/line_follow.yaml)
+nano-explorer nav line-follow --config YAML            # config (default: ~/.nano-explorer/config/models/line_follow.yaml)
 nano-explorer nav line-follow --speed SPEED            # forward speed 0.0-1.0 (default: 0.3)
 nano-explorer nav line-follow --turn-gain GAIN         # differential turn gain 0.0-1.0 (default: 0.5)
 nano-explorer nav line-follow --stream-port PORT
@@ -224,7 +228,7 @@ nano-explorer nav road-follow --no-stream
 
 # AprilTag / ArUco fiducial marker navigation
 nano-explorer nav apriltag
-nano-explorer nav apriltag --config YAML               # config (default: config/models/apriltag.yaml)
+nano-explorer nav apriltag --config YAML               # config (default: ~/.nano-explorer/config/models/apriltag.yaml)
 nano-explorer nav apriltag --speed SPEED
 nano-explorer nav apriltag --turn-gain GAIN
 nano-explorer nav apriltag --stream-port PORT
@@ -238,7 +242,7 @@ nano-explorer nav apriltag --no-stream
 ```bash
 # Monocular visual odometry (ORB / SIFT / AKAZE feature tracking)
 nano-explorer map odometry
-nano-explorer map odometry --config YAML               # config (default: config/models/odometry.yaml)
+nano-explorer map odometry --config YAML               # config (default: ~/.nano-explorer/config/models/odometry.yaml)
 nano-explorer map odometry --speed SPEED               # motor speed 0.0-1.0 (default: 0.3)
 nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map odometry --stream-port PORT
@@ -247,7 +251,7 @@ nano-explorer map odometry --no-stream
 # Monocular SLAM — ORB-SLAM2 backend
 # Stream shows a live top-down trajectory map with camera picture-in-picture
 nano-explorer map slam
-nano-explorer map slam --config YAML                   # config (default: config/models/slam.yaml)
+nano-explorer map slam --config YAML                   # config (default: ~/.nano-explorer/config/models/slam.yaml)
 nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
 nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map slam --stream-port PORT
@@ -256,8 +260,9 @@ nano-explorer map slam --no-stream
 
 ##### Camera calibration
 
-`config/models/orbslam2_mono.yaml` ships with placeholder intrinsics (`fx=fy=700, cx=320, cy=240`,
-zero distortion). Monocular ORB-SLAM2's initialization is sensitive to these being close to
+`~/.nano-explorer/config/models/orbslam2_mono.yaml` (seeded on first use from the package's
+bundled default) ships with placeholder intrinsics (`fx=fy=700, cx=320, cy=240`, zero
+distortion). Monocular ORB-SLAM2's initialization is sensitive to these being close to
 correct — wrong values are a common reason it keeps rejecting its own initial map
 (`Wrong initialization, reseting...`). Calibrate against a printed checkerboard before your first
 `map slam` run:
@@ -269,7 +274,7 @@ python tools/calibrate_camera.py
 python tools/calibrate_camera.py --board-cols 9 --board-rows 6 --samples 15  # defaults shown
 python tools/calibrate_camera.py --camera usb --stream-port 8090
 python tools/calibrate_camera.py --update-config   # back up + patch orbslam2_mono.yaml in place
-python tools/calibrate_camera.py --apply-from config/models/orbslam2_mono.calibrated.yaml
+python tools/calibrate_camera.py --apply-from ~/.nano-explorer/config/models/orbslam2_mono.calibrated.yaml
                                                     # re-apply a previous result, no recapture
 ```
 

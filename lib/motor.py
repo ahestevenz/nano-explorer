@@ -65,19 +65,21 @@ from typing import Tuple
 import yaml
 from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
 
-from lib.settings import NanoSettings
+from lib.settings import NanoSettings, ensure_user_config
 
 
 def _load_trim() -> Tuple[float, float]:
     """
-    Read (left_trim, right_trim) from NanoSettings().motor_trim_config_path,
-    defaulting to (1.0, 1.0) if the file doesn't exist yet. Deliberately a
-    plain YAML read, not a pydantic env-settings field — a real (exported)
-    shell env var silently overrides a same-named .env file entry, which
-    made a stale export indistinguishable from a freshly-calibrated value.
-    See tools/calibrate_motors.py and config/motors/trim.yaml.
+    Read (left_trim, right_trim) from NanoSettings().motor_trim_config_path
+    (~/.nano-explorer/config/motors/trim.yaml — seeded from the bundled
+    default the first time this runs), defaulting to (1.0, 1.0) if even the
+    bundled default is somehow missing. Deliberately a plain YAML read, not
+    a pydantic env-settings field — a real (exported) shell env var silently
+    overrides a same-named .env file entry, which made a stale export
+    indistinguishable from a freshly-calibrated value. See
+    tools/calibrate_motors.py and config/motors/trim.yaml.
     """
-    path = NanoSettings().motor_trim_config_path
+    path = ensure_user_config(NanoSettings().motor_trim_config_path)
     if not path.exists():
         return 1.0, 1.0
     with open(path, encoding="utf-8") as f:

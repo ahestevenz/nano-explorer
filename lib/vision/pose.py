@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.settings import PROJECT_ROOT_PATH
+from lib.settings import PROJECT_ROOT_PATH, ensure_user_config, user_config_path
 
 # Skeleton connections for visualisation (COCO keypoint names)
 _SKELETON_EDGES = [
@@ -60,15 +60,16 @@ class PoseConfig(BaseModel):
         turn_gain:   Differential turn gain [0.0, 1.0].
     """
 
-    config_path: Path = PROJECT_ROOT_PATH / "config/models/pose.yaml"
+    config_path: Path = user_config_path("models/pose.yaml")
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
-    @validator("config_path")
+    @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
-        if not Path(v).exists():
+        v = ensure_user_config(v)
+        if not v.exists():
             raise ValueError(f"Pose config not found: {v}")
         return v
 
