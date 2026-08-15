@@ -80,10 +80,12 @@ Procedure
      the correction automatically. Press 'q' + ENTER at any point to quit
      without saving.
 
-Note: this always starts from a clean 1.0/1.0 (no trim), not whatever is
-currently saved — if you're refining an existing calibration rather than
-starting over, the current values are printed at startup so a fresh
-measurement round builds on top of them correctly.
+Note: this starts from whatever trim is currently saved in
+~/.nano-explorer.env (printed at startup), not a clean 1.0/1.0 — a
+refinement measurement composes correctly on top of an existing
+calibration, so there's no need to redo it from scratch. To start over
+from an unmodified baseline instead, remove or comment out
+NANO_MOTOR_LEFT_TRIM / NANO_MOTOR_RIGHT_TRIM in that file first.
 """
 
 import argparse
@@ -198,17 +200,25 @@ def _write_env_trim(left_trim: float, right_trim: float) -> None:
 
 def calibrate(speed: float, duration: float, wheelbase: float) -> None:
     from lib.motor import MotorController
+    from lib.settings import NanoSettings
 
-    controller = MotorController(left_trim=1.0, right_trim=1.0)
+    # Build on whatever is already saved (NanoSettings reads the same
+    # ~/.nano-explorer.env that _write_env_trim writes to) instead of
+    # discarding it — the ratio math below rescales by whatever trim was
+    # active during a given test drive, so starting from a prior
+    # calibration composes correctly rather than needing a from-scratch redo.
+    saved = NanoSettings()
+    left_trim, right_trim = saved.motor_left_trim, saved.motor_right_trim
+
+    controller = MotorController(left_trim=left_trim, right_trim=right_trim)
     controller.open()
-
-    left_trim, right_trim = 1.0, 1.0
     controller.set_trim(left_trim, right_trim)
 
     print(
         f"\n[calibrate-motors] wheelbase={wheelbase:.2f}cm  speed={speed:.2f}  "
         f"test duration={duration:.1f}s\n"
-        f"[calibrate-motors] starting trim: left={left_trim:.3f}  right={right_trim:.3f}\n"
+        f"[calibrate-motors] starting trim (from ~/.nano-explorer.env): "
+        f"left={left_trim:.3f}  right={right_trim:.3f}\n"
         "[calibrate-motors] Mark a straight reference line on the floor and place the "
         "robot's center at the start, facing along it."
     )
