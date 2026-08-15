@@ -103,8 +103,12 @@ class FaceDetector(CameraMotionMixIn):
                     "haarcascade_frontalface_default.xml"
                 )
             body_path = cfg.get("body_cascade", "")
-            if body_path and Path(body_path).exists():
-                self._body_cascade = cv2.CascadeClassifier(body_path)
+            if body_path:
+                body_path = Path(body_path)
+                if not body_path.is_absolute():
+                    body_path = PROJECT_ROOT_PATH / body_path
+                if body_path.exists():
+                    self._body_cascade = cv2.CascadeClassifier(str(body_path))
             self._scale = cfg.get("scale_factor", 1.1)
             self._neigh = cfg.get("min_neighbors", 5)
             logger.success("Loaded Haar cascade face detector.")
@@ -113,7 +117,14 @@ class FaceDetector(CameraMotionMixIn):
             for key in ("model", "config"):
                 if key not in cfg:
                     raise ValueError(f"dnn backend requires '{key}' in config YAML")
-            self._net = cv2.dnn.readNetFromCaffe(cfg["config"], cfg["model"])
+
+            def _resolve(p: str) -> Path:
+                path = Path(p)
+                return path if path.is_absolute() else PROJECT_ROOT_PATH / path
+
+            self._net = cv2.dnn.readNetFromCaffe(
+                str(_resolve(cfg["config"])), str(_resolve(cfg["model"]))
+            )
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
             self._threshold = cfg.get("threshold", 0.5)

@@ -144,10 +144,20 @@ class ObjectDetector(CameraMotionMixIn):
                         f"{ObjectDetectorBackend.OPENCV_DNN} backend"
                         f" requires '{key}' in config YAML"
                     )
-            self._net = cv2.dnn.readNet(cfg["model"], cfg["config"])
+
+            def _resolve(p: str) -> Path:
+                path = Path(p)
+                return path if path.is_absolute() else PROJECT_ROOT_PATH / path
+
+            model_path, config_path, labels_path = (
+                _resolve(cfg["model"]),
+                _resolve(cfg["config"]),
+                _resolve(cfg["labels"]),
+            )
+            self._net = cv2.dnn.readNet(str(model_path), str(config_path))
             self._net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self._net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-            with open(cfg["labels"], encoding="utf-8") as f:
+            with open(labels_path, encoding="utf-8") as f:
                 self._labels = [ln.strip() for ln in f]
             self._inp_w = cfg.get("input_width", 300)
             self._inp_h = cfg.get("input_height", 300)

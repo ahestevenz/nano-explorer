@@ -119,7 +119,10 @@ class LineFollower(CameraMotionMixIn):
             model_path = cfg.get("model")
             if not model_path:
                 raise ValueError("CNN mode requires 'model' in config YAML")
-            self._load_cnn(Path(model_path))
+            model_path = Path(model_path)
+            if not model_path.is_absolute():
+                model_path = PROJECT_ROOT_PATH / model_path
+            self._load_cnn(model_path)
 
     def _load_cnn(self, model_path: Path) -> None:
         import torch
