@@ -16,7 +16,7 @@ only bring the stronger one down to match the weaker one.
 
 Controls
 --------
-  f / space   -> drive forward for --duration seconds at --speed, then stop
+  f / space / up-arrow -> hold to drive forward at --speed; release to stop
   right arrow -> "it drifted RIGHT last run" (nudges trim to compensate)
   left arrow  -> "it drifted LEFT last run"  (nudges trim to compensate)
   +           -> increase the nudge step size
@@ -27,9 +27,10 @@ Controls
 Procedure
 ---------
   1. Put the robot on the floor with room to roll forward a meter or two.
-  2. Run this script (add --speed/--duration to match how you actually
-     drive — the drift can vary with speed).
-  3. Press f to run a forward test. Watch which way the nose drifts.
+  2. Run this script (add --speed to match how you actually drive — the
+     drift can vary with speed).
+  3. Hold f (space or the up arrow also work) to drive forward and watch
+     which way the nose drifts; release the key to stop.
   4. Press the arrow key matching the drift direction (drifts left ->
      left arrow, drifts right -> right arrow). Repeat from step 3.
   5. Once it runs close to straight, press s to save. This writes
@@ -55,6 +56,25 @@ os.environ.setdefault("OPENBLAS_CORETYPE", "ARMV8")
 _ENV_FILE = Path.home() / ".nano-explorer.env"
 _MAX_BIAS = 0.5  # keeps both trims within settings.py's (0.0, 1.0] bound
 
+# Terminals have no real key-up event, so "release" is inferred the same way
+# lib.motion.teleoperation does: a held key auto-repeats every keystroke while
+# down, so if _STOP_DELAY passes with no drive keystroke, the key must be up.
+_STOP_DELAY = 0.15
+_POLL_TIMEOUT = 0.05
+# How long to hold onto an incomplete arrow-key escape sequence (only \x1b
+# has arrived so far) before discarding it as stale.
+_PARTIAL_SEQ_TIMEOUT = 0.1
+_ARROW_SEQS = {b"\x1b[A": "drive", b"\x1b[C": "right", b"\x1b[D": "left"}
+_SINGLE_BYTE_ACTIONS = {
+    b"f": "drive",
+    b" ": "drive",
+    b"s": "save",
+    b"q": "quit",
+    b"\x03": "quit",
+    b"+": "step_up",
+    b"-": "step_down",
+}
+
 
 def _clamp_bias(bias: float) -> float:
     return max(-_MAX_BIAS, min(_MAX_BIAS, bias))
@@ -67,30 +87,47 @@ def _trims_from_bias(bias: float):
     return left, right
 
 
-def _read_key(fd) -> str:
-    """Blocking single-keypress read; resolves arrow-key escape sequences to left/right."""
-    import select
+class _KeyReader:
+    """
+    Assembles raw terminal bytes into one resolved action per non-blocking poll:
+    "drive" (f, space, or up arrow — hold to drive forward), "left"/"right"
+    (drift feedback), "step_up"/"step_down", "save", "quit", or "" for nothing
+    yet.
 
-    chunk = os.read(fd, 1)
-    if chunk != b"\x1b":
-        return chunk.decode(errors="ignore")
+    Arrow keys arrive as a 3-byte escape sequence (\\x1b[A etc.) that a single
+    os.read() isn't guaranteed to return in one piece — under load it can wake
+    up after only 1 or 2 bytes — so partial sequences are buffered across
+    calls instead of being compared directly and silently dropped, the same
+    fix already applied to lib.motion.teleoperation's _ArrowKeyReader.
+    """
 
-    # Arrow keys are ESC [ A/B/C/D — the rest should follow within a few ms;
-    # a short select() avoids blocking forever on a bare Esc keypress.
-    rest = b""
-    while len(rest) < 2:
-        ready, _, _ = select.select([fd], [], [], 0.05)
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+        self._pending = b""
+        self._pending_since: float = 0.0
+
+    def read_action(self) -> str:
+        import select
+
+        ready, _, _ = select.select([self._fd], [], [], _POLL_TIMEOUT)
         if not ready:
-            break
-        rest += os.read(fd, 2 - len(rest))
-    return {b"[C": "right", b"[D": "left"}.get(rest, "")
+            if self._pending and time.time() - self._pending_since > _PARTIAL_SEQ_TIMEOUT:
+                self._pending = b""
+            return ""
 
+        self._pending += os.read(self._fd, 3 - len(self._pending))
+        if not self._pending_since:
+            self._pending_since = time.time()
 
-def _run_forward(controller, speed: float, duration: float) -> None:
-    print(f"[calibrate-motors] driving forward at speed={speed:.2f} for {duration:.1f}s...")
-    controller.forward(speed)
-    time.sleep(duration)
-    controller.stop()
+        if self._pending[:1] != b"\x1b":
+            chunk, self._pending, self._pending_since = self._pending, b"", 0.0
+            return _SINGLE_BYTE_ACTIONS.get(chunk, "")
+
+        if len(self._pending) < 3:
+            return ""  # escape sequence still incomplete — wait for the rest
+
+        chunk, self._pending, self._pending_since = self._pending, b"", 0.0
+        return _ARROW_SEQS.get(chunk, "")
 
 
 def _write_env_trim(left_trim: float, right_trim: float) -> None:
@@ -123,8 +160,10 @@ def _write_env_trim(left_trim: float, right_trim: float) -> None:
     print(f"[calibrate-motors] Wrote {_ENV_FILE}")
 
 
-def calibrate(speed: float, duration: float, step: float) -> None:
+# pylint: disable=too-many-statements
+def calibrate(speed: float, step: float) -> None:
     import termios
+    import threading
     import tty
 
     from lib.motor import MotorController
@@ -137,7 +176,7 @@ def calibrate(speed: float, duration: float, step: float) -> None:
     controller.set_trim(left_trim, right_trim)
 
     print(
-        "\n[calibrate-motors] f/space = forward test  |  "
+        "\n[calibrate-motors] hold f / space / up-arrow = drive forward, release = stop  |  "
         "left/right arrow = it drifted that way  |  +/- = step size  |  "
         "s = save & quit  |  q = quit without saving\n"
         f"[calibrate-motors] step size: {step:.3f}\n"
@@ -146,40 +185,65 @@ def calibrate(speed: float, duration: float, step: float) -> None:
 
     fd = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
-    key = "q"
+    reader = _KeyReader(fd)
+    driving = False
+    stop_timer = None
+    final_action = "quit"
+
+    def _stop_if_released() -> None:
+        nonlocal driving
+        controller.stop()
+        driving = False
+        print("[calibrate-motors] stopped.")
+
+    def _schedule_stop() -> None:
+        nonlocal stop_timer
+        if stop_timer is not None:
+            stop_timer.cancel()
+        stop_timer = threading.Timer(_STOP_DELAY, _stop_if_released)
+        stop_timer.daemon = True
+        stop_timer.start()
+
     try:
         tty.setcbreak(fd)
         while True:
-            key = _read_key(fd)
-            if key in ("f", " "):
-                _run_forward(controller, speed, duration)
-            elif key == "right":
+            action = reader.read_action()
+            if action == "drive":
+                if not driving:
+                    driving = True
+                    print(f"[calibrate-motors] driving forward at speed={speed:.2f}...")
+                    controller.forward(speed)
+                _schedule_stop()
+                continue
+            if action == "right":
                 bias = _clamp_bias(bias + step)
-            elif key == "left":
+            elif action == "left":
                 bias = _clamp_bias(bias - step)
-            elif key == "+":
+            elif action == "step_up":
                 step = min(0.2, step * 1.5)
                 print(f"[calibrate-motors] step size: {step:.3f}")
                 continue
-            elif key == "-":
+            elif action == "step_down":
                 step = max(0.005, step / 1.5)
                 print(f"[calibrate-motors] step size: {step:.3f}")
                 continue
-            elif key in ("s", "q", "\x03"):
+            elif action in ("save", "quit"):
+                final_action = action
                 break
             else:
                 continue
 
-            if key in ("left", "right"):
-                left_trim, right_trim = _trims_from_bias(bias)
-                controller.set_trim(left_trim, right_trim)
-                print(f"[calibrate-motors] trim: left={left_trim:.3f}  right={right_trim:.3f}")
+            left_trim, right_trim = _trims_from_bias(bias)
+            controller.set_trim(left_trim, right_trim)
+            print(f"[calibrate-motors] trim: left={left_trim:.3f}  right={right_trim:.3f}")
     finally:
+        if stop_timer is not None:
+            stop_timer.cancel()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
         controller.stop()
         controller.close()
 
-    if key == "s":
+    if final_action == "save":
         print(f"[calibrate-motors] Final trim: left={left_trim:.3f}  right={right_trim:.3f}")
         _write_env_trim(left_trim, right_trim)
     else:
@@ -191,15 +255,12 @@ def main():
         description="Calibrate per-wheel motor trim so the JetBot drives straight",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--speed", type=float, default=0.3, help="Forward test speed [0.0, 1.0]")
-    parser.add_argument(
-        "--duration", type=float, default=1.5, help="Forward test duration in seconds"
-    )
+    parser.add_argument("--speed", type=float, default=0.3, help="Forward drive speed [0.0, 1.0]")
     parser.add_argument(
         "--step", type=float, default=0.02, help="Initial trim nudge step per arrow-key press"
     )
     args = parser.parse_args()
-    calibrate(speed=args.speed, duration=args.duration, step=args.step)
+    calibrate(speed=args.speed, step=args.step)
 
 
 if __name__ == "__main__":
