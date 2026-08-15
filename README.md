@@ -83,17 +83,36 @@ compensation, so this shows up as the robot arcing to one side when told to driv
 Calibrate a per-wheel power trim to fix it:
 
 ```bash
-python tools/calibrate_motors.py
-python tools/calibrate_motors.py --speed 0.3 --duration 1.5   # defaults shown
-python tools/calibrate_motors.py --step 0.02                  # initial trim nudge per key press
+python tools/calibrate_motors.py --wheelbase 10.4              # wheelbase in cm is required
+python tools/calibrate_motors.py --wheelbase 10.4 --speed 0.3 --duration 2.0   # defaults shown
 ```
 
-Press `f` (or space) to run a forward test, then the arrow key matching the direction it
-drifted (left arrow = drifted left, right arrow = drifted right) to nudge the trim, and repeat
-until it drives straight. Press `s` to save — writes `NANO_MOTOR_LEFT_TRIM` /
-`NANO_MOTOR_RIGHT_TRIM` to `~/.nano-explorer.env` (backing up any existing file first), which
-every command using `MotorController` then picks up automatically. See the script's docstring
-for the full control list and procedure.
+`--wheelbase` is the distance between the two wheels' ground-contact points, in centimetres —
+measure it once with a ruler or calipers (it doesn't change unless you change the chassis).
+There's no baked-in default, since a wrong wheelbase silently skews the whole calibration.
+
+This works by **measuring, not guessing**: rather than eyeballing live drift and nudging a trim
+value key-press by key-press (hard to do well — you can't watch the robot and react on a
+keyboard in the same instant), it drives a fixed, repeatable test and asks you to measure the
+result with a tape measure. From that measurement plus the wheelbase, it computes the exact
+trim correction directly from differential-drive kinematics — no guessing, and it converges in
+1-2 test drives instead of many:
+
+1. Mark a straight reference line on the floor (tape, a rug seam, a row of tiles) with ~2m of
+   clear space ahead, and place the robot's center at one end, facing along it.
+2. Press ENTER to run a test drive (forward at `--speed` for `--duration`).
+3. Once it stops, measure with a tape measure and enter when prompted: how far forward it
+   travelled along the line, and how far off the line it ended up (and to which side).
+4. The tool computes and applies the corrected trim from those two numbers.
+5. Press ENTER again to run a verification drive with the new trim — it should track much
+   closer to the line now. Repeat steps 3-5 once more to refine further if needed.
+6. Press `s` + ENTER to save — writes `NANO_MOTOR_LEFT_TRIM` / `NANO_MOTOR_RIGHT_TRIM` to
+   `~/.nano-explorer.env` (backing up any existing file first), which every command using
+   `MotorController` then picks up automatically. Press `q` + ENTER at any point to quit
+   without saving.
+
+See the script's docstring for the kinematics derivation and the small-angle approximation it
+relies on.
 
 ### Computer Vision & Detection
 
