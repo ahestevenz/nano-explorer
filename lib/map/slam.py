@@ -30,6 +30,14 @@ _VALID_BACKENDS = ["orbslam2"]
 # Tracking state labels used by ORB-SLAM2 (ORB_SLAM2::Tracking::eTrackingState)
 _ORBSLAM2_STATES = {-1: "NOT_READY", 0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
 
+# How often (in frames) to log the extra frame-quality diagnostics below —
+# frequent enough to catch a stuck init within a couple seconds, cheap enough
+# (one extra ORB detection pass) not to disturb the frame rate.
+_DIAG_INTERVAL = 30
+# If tracking hasn't left NOT_INIT/NO_IMAGES by this many frames, log one
+# warning pointing at the diagnostics instead of silently looping forever.
+_STALL_WARN_FRAMES = 150
+
 
 class SlamConfig(BaseModel):
     """
@@ -72,6 +80,8 @@ class SlamMapper(CameraMotionMixIn):
         self._run_start_ts = None
         self._last_frame_ts = None
         self._last_state_label = None
+        self._diag_orb = None
+        self._stall_warned = False
 
     def _load(self) -> None:
         import yaml
@@ -127,6 +137,25 @@ class SlamMapper(CameraMotionMixIn):
         # could never appear. get_tracking_state() is the real state accessor.
         self._slam.process_image_mono(gray, timestamp)
         return int(self._slam.get_tracking_state())
+
+    def _frame_diagnostics(self, gray: np.ndarray) -> str:
+        """
+        Independent-of-ORBSLAM2 frame health check: brightness/contrast and a plain
+        cv2 ORB feature count. The orbslam2 Python bindings expose no accessor for
+        how many features/matches *it* found on a given frame, so this runs a
+        second, throwaway ORB pass purely to tell "camera delivering unusable frames"
+        (black/blown-out/blurry/low-texture — nfeatures near 0) apart from "frames
+        look fine but motion is degenerate for triangulation" (nfeatures healthy,
+        tracking still stuck in NOT_INIT) without needing the C++ side instrumented.
+        """
+        if self._diag_orb is None:
+            self._diag_orb = cv2.ORB_create(nfeatures=500)
+        mean, std = cv2.meanStdDev(gray)
+        keypoints = self._diag_orb.detect(gray, None)
+        return (
+            f"  shape={gray.shape[::-1]}  brightness={mean[0, 0]:.0f}±{std[0, 0]:.0f}"
+            f"  cv2_orb_kpts={len(keypoints)}"
+        )
 
     def _get_trajectory(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
@@ -206,10 +235,40 @@ class SlamMapper(CameraMotionMixIn):
                     self._last_state_label = label
 
                 traj_info = f"  poses={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
-                logger.debug(
-                    f"ORB-SLAM2 frame={self._frame_idx}  dt={dt * 1000:.0f}ms  "
-                    f"state={label}{traj_info}"
+                need_diag = state_changed or self._frame_idx % _DIAG_INTERVAL == 0
+
+                # opt(lazy=True) defers evaluating every arg (incl. calling
+                # _frame_diagnostics, which does a real ORB pass over the frame)
+                # until loguru confirms a DEBUG-level sink is actually active —
+                # so this costs nothing when only INFO/WARNING are enabled.
+                logger.opt(lazy=True).debug(
+                    "ORB-SLAM2 frame={}  dt={:.0f}ms  state={}{}{}",
+                    lambda: self._frame_idx,
+                    lambda dt=dt: dt * 1000,
+                    lambda label=label: label,
+                    lambda traj_info=traj_info: traj_info,
+                    lambda frame=frame, need_diag=need_diag: (
+                        self._frame_diagnostics(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                        if need_diag
+                        else ""
+                    ),
                 )
+
+                if (
+                    label in ("NOT_INIT", "NO_IMAGES")
+                    and self._frame_idx == _STALL_WARN_FRAMES
+                    and not self._stall_warned
+                ):
+                    self._stall_warned = True
+                    logger.warning(
+                        f"ORB-SLAM2 still {label} after {_STALL_WARN_FRAMES} frames. "
+                        "Re-run with DEBUG logging enabled to see the per-frame diagnostics: "
+                        "cv2_orb_kpts near 0 means the camera feed itself is unusable "
+                        "(dark/blurry/low-texture); a healthy keypoint count with no init "
+                        "means the motion so far is degenerate for triangulation — drive "
+                        "with forward/backward translation, not pure in-place turns, "
+                        "until state changes to OK."
+                    )
 
                 if self._config.stream and self._server is not None:
                     h, w = frame.shape[:2]
