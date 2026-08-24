@@ -335,10 +335,11 @@ class TestSlamVisualization:
         )
         frame = _dummy_frame()
         gray = np.zeros((480, 640), dtype=np.uint8)
-        keypoints, matches, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+        _, matches, inlier_mask, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
 
         assert prev_frame is None
         assert prev_kps is None
+        assert inlier_mask is None
         assert not matches
 
     def test_update_visualization_second_call_has_prev(self):
@@ -351,10 +352,15 @@ class TestSlamVisualization:
         gray = np.zeros((480, 640), dtype=np.uint8)
 
         mapper._update_visualization(frame, gray)
-        _, _, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+        _, _, _, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
 
         assert prev_frame is not None
         assert prev_frame.shape == frame.shape
+
+    def test_ransac_inlier_mask_too_few_matches(self):
+        from lib.map.slam import SlamMapper
+
+        assert SlamMapper._ransac_inlier_mask([], [], []) is None
 
     def test_render_features_panel_draws_keypoints(self):
         import cv2
@@ -370,10 +376,11 @@ class TestSlamVisualization:
     def test_render_matches_panel_no_prev_frame(self):
         from lib.map.slam import SlamMapper
 
-        panel = SlamMapper._render_matches_panel(None, None, _dummy_frame(), [], [], 640, 480)
-        assert panel.shape == (480, 640, 3)
+        panel = SlamMapper._render_matches_panel(None, None, _dummy_frame(), [], [], None, 640, 480)
+        # Full row width (2x) since the camera panel above it was removed.
+        assert panel.shape == (480, 1280, 3)
 
-    def test_render_matches_panel_with_prev_frame(self):
+    def test_render_matches_panel_with_prev_frame_and_inliers(self):
         import cv2
 
         from lib.map.slam import SlamMapper
@@ -385,17 +392,21 @@ class TestSlamVisualization:
             cv2.KeyPoint(x=321.0, y=241.0, size=5.0),
             cv2.KeyPoint(x=99.0, y=99.0, size=5.0),
         ]
-        matches = [cv2.DMatch(_queryIdx=0, _trainIdx=0, _distance=1.0)]
+        matches = [
+            cv2.DMatch(_queryIdx=0, _trainIdx=0, _distance=1.0),
+            cv2.DMatch(_queryIdx=1, _trainIdx=1, _distance=2.0),
+        ]
+        inlier_mask = np.array([[1], [0]], dtype=np.uint8)
         panel = SlamMapper._render_matches_panel(
-            prev_frame, prev_kps, frame, kps, matches, 640, 480
+            prev_frame, prev_kps, frame, kps, matches, inlier_mask, 640, 480
         )
-        assert panel.shape == (480, 640, 3)
+        assert panel.shape == (480, 1280, 3)
 
-    def test_render_visualization_view_is_2x2_grid(self):
+    def test_render_visualization_view_canvas_size(self):
         from lib.map.slam import SlamMapper
 
         frame = _dummy_frame()
         out = SlamMapper._render_visualization_view(
-            [], frame, [], [], None, None, "NOT_INIT", "orbslam2", 1280, 960
+            [], frame, [], [], None, None, None, "NOT_INIT", "orbslam2", 1280, 960
         )
         assert out.shape == (960, 1280, 3)

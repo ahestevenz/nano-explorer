@@ -105,8 +105,9 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         "--visualize",
         action="store_true",
         default=False,
-        help="Show a 2x2 debug view in the stream: trajectory map, live camera, "
-        "detected ORB keypoints, and frame-to-frame feature matches",
+        help="Show a debug view in the stream: trajectory map + detected ORB "
+        "keypoints on top, frame-to-frame matches below (green=raw, "
+        "blue=surviving RANSAC)",
     )
     p_slam.set_defaults(func=_run_slam)
 

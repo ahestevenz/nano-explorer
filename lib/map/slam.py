@@ -55,8 +55,9 @@ class SlamConfig(BaseModel):
         stream_port:  MJPEG server port.
         speed:        Motor speed [0.0, 1.0].
         turn_gain:    Turn gain [0.0, 1.0].
-        visualize:    Replace the stream's map view with a 2x2 debug view
-                       (map, camera, ORB keypoints, frame-to-frame matches).
+        visualize:    Replace the stream's map view with a debug view: trajectory
+                       map + ORB keypoints on top, frame-to-frame matches below
+                       (green=raw, blue=surviving RANSAC).
     """
 
     config_path: Path = user_config_path("models/slam.yaml")
@@ -184,9 +185,11 @@ class SlamMapper(CameraMotionMixIn):
 
     def _update_visualization(self, frame: np.ndarray, gray: np.ndarray) -> tuple:
         """
-        Detect ORB keypoints in the current frame and ratio-test match them
-        against the previous frame. Returns (keypoints, matches, prev_frame,
-        prev_kps) — prev_frame/prev_kps are None on the first call.
+        Detect ORB keypoints in the current frame, ratio-test match them against
+        the previous frame, then RANSAC-filter those matches via the fundamental
+        matrix. Returns (keypoints, matches, inlier_mask, prev_frame, prev_kps) —
+        prev_frame/prev_kps/inlier_mask are None on the first call (or whenever
+        there aren't enough matches to fit a fundamental matrix).
 
         Independent of ORB-SLAM2's own extractor (see _frame_diagnostics) —
         only feeds the --visualize overlay, never the tracker itself.
@@ -197,6 +200,7 @@ class SlamMapper(CameraMotionMixIn):
 
         keypoints, desc = self._viz_detector.detectAndCompute(gray, None)
         matches = []
+        inlier_mask = None
         if self._viz_prev_desc is not None and desc is not None:
             raw = self._viz_matcher.knnMatch(self._viz_prev_desc, desc, k=2)
             for pair in raw:
@@ -204,6 +208,7 @@ class SlamMapper(CameraMotionMixIn):
                     m, n = pair
                     if m.distance < _VIZ_MATCH_RATIO * n.distance:
                         matches.append(m)
+            inlier_mask = self._ransac_inlier_mask(self._viz_prev_kps, keypoints, matches)
 
         prev_frame, prev_kps = self._viz_prev_frame, self._viz_prev_kps
         self._viz_prev_frame, self._viz_prev_kps, self._viz_prev_desc = (
@@ -211,7 +216,21 @@ class SlamMapper(CameraMotionMixIn):
             keypoints,
             desc,
         )
-        return keypoints, matches, prev_frame, prev_kps
+        return keypoints, matches, inlier_mask, prev_frame, prev_kps
+
+    @staticmethod
+    def _ransac_inlier_mask(prev_kps: list, keypoints: list, matches: list) -> Optional[np.ndarray]:
+        """
+        RANSAC-filter ratio-tested matches by fitting a fundamental matrix.
+        None if there are too few matches (<8) to fit one — cv2.findFundamentalMat's
+        minimum for the RANSAC method.
+        """
+        if len(matches) < 8:
+            return None
+        pts1 = np.float32([prev_kps[m.queryIdx].pt for m in matches])
+        pts2 = np.float32([keypoints[m.trainIdx].pt for m in matches])
+        _, mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC, 1.0, 0.99)
+        return mask
 
     def _get_trajectory(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
@@ -331,14 +350,19 @@ class SlamMapper(CameraMotionMixIn):
                     h, w = frame.shape[:2]
                     scale = 2
                     if self._config.visualize:
-                        keypoints, matches, prev_frame, prev_kps = self._update_visualization(
-                            frame, gray
-                        )
+                        (
+                            keypoints,
+                            matches,
+                            inlier_mask,
+                            prev_frame,
+                            prev_kps,
+                        ) = self._update_visualization(frame, gray)
                         view = self._render_visualization_view(
                             traj,
                             frame,
                             keypoints,
                             matches,
+                            inlier_mask,
                             prev_frame,
                             prev_kps,
                             label,
@@ -468,16 +492,19 @@ class SlamMapper(CameraMotionMixIn):
         frame: np.ndarray,
         keypoints: list,
         matches: list,
+        inlier_mask: Optional[np.ndarray],
         w: int,
         h: int,
     ) -> np.ndarray:
         """
-        Camera-frame-sized panel: previous and current frame side by side, with
-        lines connecting matched keypoints. Blank (with a status message) until
-        a previous frame exists.
+        Full-row-width panel: previous | current frame side by side. Every
+        ratio-test match is drawn in green (raw); the subset that also survives
+        RANSAC (fundamental-matrix fit) is drawn over it in blue — so a green-only
+        line is a match RANSAC rejected as an outlier. Blank (with a status
+        message) until a previous frame exists.
         """
         if prev_frame is None:
-            panel = np.zeros((h, w, 3), dtype=np.uint8)
+            panel = np.zeros((h, 2 * w, 3), dtype=np.uint8)
             cv2.putText(
                 panel,
                 "warming up...",
@@ -498,17 +525,32 @@ class SlamMapper(CameraMotionMixIn):
             matches,
             None,
             matchColor=(0, 255, 0),
-            singlePointColor=(0, 0, 255),
+            singlePointColor=None,
             flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
         )
-        combined = cv2.resize(combined, (w, h))
+        n_inliers = 0
+        if inlier_mask is not None:
+            n_inliers = int(inlier_mask.sum())
+            combined = cv2.drawMatches(
+                prev_frame,
+                prev_kps,
+                frame,
+                keypoints,
+                matches,
+                combined,
+                matchColor=(255, 0, 0),
+                singlePointColor=None,
+                matchesMask=inlier_mask.ravel().tolist(),
+                flags=cv2.DrawMatchesFlags_DRAW_OVER_OUTIMG
+                | cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            )
         cv2.putText(
             combined,
-            f"matches: {len(matches)}",
+            f"matches: {len(matches)} raw / {n_inliers} after RANSAC",
             (10, 25),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (0, 255, 0),
+            (255, 255, 255),
             2,
             cv2.LINE_AA,
         )
@@ -520,6 +562,7 @@ class SlamMapper(CameraMotionMixIn):
         frame: np.ndarray,
         keypoints: list,
         matches: list,
+        inlier_mask: Optional[np.ndarray],
         prev_frame: Optional[np.ndarray],
         prev_kps: Optional[list],
         state_label: str,
@@ -528,35 +571,22 @@ class SlamMapper(CameraMotionMixIn):
         canvas_h: int,
     ) -> np.ndarray:
         """
-        2x2 debug view for --visualize: top-down map | live camera
-                                         ORB keypoints | frame-to-frame matches
+        Debug view for --visualize:
+            top:    trajectory map | detected ORB keypoints
+            bottom: frame-to-frame matches, full width (green=raw, blue=RANSAC inliers)
         """
         h, w = frame.shape[:2]
 
         map_panel = SlamMapper._render_map_view(traj, frame, state_label, backend, w, h)
-
-        cam_panel = frame.copy()
-        color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
-        cv2.putText(
-            cam_panel,
-            f"[{backend}] {state_label}",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
-
         kp_panel = SlamMapper._render_features_panel(frame, keypoints)
         match_panel = SlamMapper._render_matches_panel(
-            prev_frame, prev_kps, frame, keypoints, matches, w, h
+            prev_frame, prev_kps, frame, keypoints, matches, inlier_mask, w, h
         )
 
         canvas = np.vstack(
             [
-                np.hstack([map_panel, cam_panel]),
-                np.hstack([kp_panel, match_panel]),
+                np.hstack([map_panel, kp_panel]),
+                match_panel,
             ]
         )
         if canvas.shape[:2] != (canvas_h, canvas_w):
