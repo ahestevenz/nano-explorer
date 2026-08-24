@@ -99,6 +99,14 @@ class TestSlamDefaults:
         ns = _parse(["slam", "--no-stream"])
         assert ns.stream is False
 
+    def test_default_visualize_is_false(self):
+        ns = _parse(["slam"])
+        assert ns.visualize is False
+
+    def test_visualize_flag(self):
+        ns = _parse(["slam", "--visualize"])
+        assert ns.visualize is True
+
     def test_func_is_set(self):
         from commands.mapping import _run_slam
 
@@ -315,3 +323,79 @@ class TestSlamMapper:
         out_lost = SlamMapper._annotate_frame(frame.copy(), "LOST", "orbslam2")
         # Different state labels should produce different colours
         assert not np.array_equal(out_ok, out_lost)
+
+
+# lib/map/slam.py — --visualize rendering
+class TestSlamVisualization:
+    def test_update_visualization_first_call_has_no_prev(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        frame = _dummy_frame()
+        gray = np.zeros((480, 640), dtype=np.uint8)
+        keypoints, matches, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+
+        assert prev_frame is None
+        assert prev_kps is None
+        assert not matches
+
+    def test_update_visualization_second_call_has_prev(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        frame = _dummy_frame()
+        gray = np.zeros((480, 640), dtype=np.uint8)
+
+        mapper._update_visualization(frame, gray)
+        _, _, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+
+        assert prev_frame is not None
+        assert prev_frame.shape == frame.shape
+
+    def test_render_features_panel_draws_keypoints(self):
+        import cv2
+
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        kps = [cv2.KeyPoint(x=320.0, y=240.0, size=5.0)]
+        out = SlamMapper._render_features_panel(frame.copy(), kps)
+        assert out.shape == frame.shape
+        assert not np.array_equal(out, frame)
+
+    def test_render_matches_panel_no_prev_frame(self):
+        from lib.map.slam import SlamMapper
+
+        panel = SlamMapper._render_matches_panel(None, None, _dummy_frame(), [], [], 640, 480)
+        assert panel.shape == (480, 640, 3)
+
+    def test_render_matches_panel_with_prev_frame(self):
+        import cv2
+
+        from lib.map.slam import SlamMapper
+
+        prev_frame = _dummy_frame()
+        frame = _dummy_frame()
+        kps = [cv2.KeyPoint(x=320.0, y=240.0, size=5.0), cv2.KeyPoint(x=100.0, y=100.0, size=5.0)]
+        prev_kps = [
+            cv2.KeyPoint(x=321.0, y=241.0, size=5.0),
+            cv2.KeyPoint(x=99.0, y=99.0, size=5.0),
+        ]
+        matches = [cv2.DMatch(_queryIdx=0, _trainIdx=0, _distance=1.0)]
+        panel = SlamMapper._render_matches_panel(
+            prev_frame, prev_kps, frame, kps, matches, 640, 480
+        )
+        assert panel.shape == (480, 640, 3)
+
+    def test_render_visualization_view_is_2x2_grid(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        out = SlamMapper._render_visualization_view(
+            [], frame, [], [], None, None, "NOT_INIT", "orbslam2", 1280, 960
+        )
+        assert out.shape == (960, 1280, 3)

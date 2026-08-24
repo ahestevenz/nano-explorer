@@ -15,7 +15,7 @@ All heavy imports are deferred to run() to avoid SIGILL on startup.
 import contextlib
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -38,6 +38,12 @@ _DIAG_INTERVAL = 30
 # warning pointing at the diagnostics instead of silently looping forever.
 _STALL_WARN_FRAMES = 150
 
+# --visualize overlay: independent of ORB-SLAM2's own extractor (which exposes
+# no accessor for its features/matches — see _frame_diagnostics above), so this
+# runs a second, throwaway ORB detect+match pass purely for display.
+_VIZ_MAX_FEATURES = 500
+_VIZ_MATCH_RATIO = 0.75
+
 
 class SlamConfig(BaseModel):
     """
@@ -49,6 +55,8 @@ class SlamConfig(BaseModel):
         stream_port:  MJPEG server port.
         speed:        Motor speed [0.0, 1.0].
         turn_gain:    Turn gain [0.0, 1.0].
+        visualize:    Replace the stream's map view with a 2x2 debug view
+                       (map, camera, ORB keypoints, frame-to-frame matches).
     """
 
     config_path: Path = user_config_path("models/slam.yaml")
@@ -56,6 +64,7 @@ class SlamConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
+    visualize: bool = False
 
     @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
@@ -83,6 +92,11 @@ class SlamMapper(CameraMotionMixIn):
         self._last_state_label = None
         self._diag_orb = None
         self._stall_warned = False
+        self._viz_detector = None
+        self._viz_matcher = None
+        self._viz_prev_frame = None
+        self._viz_prev_kps = None
+        self._viz_prev_desc = None
 
     def _load(self) -> None:
         import yaml
@@ -141,8 +155,7 @@ class SlamMapper(CameraMotionMixIn):
         self._slam.initialize()
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
-    def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    def _process_frame_orbslam2(self, gray: np.ndarray, timestamp: float) -> int:
         # process_image_mono() returns a bool — whether *this frame* tracked
         # successfully — not the tracking-state enum. Casting that bool through
         # _ORBSLAM2_STATES only ever produced NO_IMAGES(0)/NOT_INIT(1); OK/LOST
@@ -168,6 +181,37 @@ class SlamMapper(CameraMotionMixIn):
             f"  shape={gray.shape[::-1]}  brightness={mean[0, 0]:.0f}±{std[0, 0]:.0f}"
             f"  cv2_orb_kpts={len(keypoints)}"
         )
+
+    def _update_visualization(self, frame: np.ndarray, gray: np.ndarray) -> tuple:
+        """
+        Detect ORB keypoints in the current frame and ratio-test match them
+        against the previous frame. Returns (keypoints, matches, prev_frame,
+        prev_kps) — prev_frame/prev_kps are None on the first call.
+
+        Independent of ORB-SLAM2's own extractor (see _frame_diagnostics) —
+        only feeds the --visualize overlay, never the tracker itself.
+        """
+        if self._viz_detector is None:
+            self._viz_detector = cv2.ORB_create(nfeatures=_VIZ_MAX_FEATURES)
+            self._viz_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+        keypoints, desc = self._viz_detector.detectAndCompute(gray, None)
+        matches = []
+        if self._viz_prev_desc is not None and desc is not None:
+            raw = self._viz_matcher.knnMatch(self._viz_prev_desc, desc, k=2)
+            for pair in raw:
+                if len(pair) == 2:
+                    m, n = pair
+                    if m.distance < _VIZ_MATCH_RATIO * n.distance:
+                        matches.append(m)
+
+        prev_frame, prev_kps = self._viz_prev_frame, self._viz_prev_kps
+        self._viz_prev_frame, self._viz_prev_kps, self._viz_prev_desc = (
+            frame.copy(),
+            keypoints,
+            desc,
+        )
+        return keypoints, matches, prev_frame, prev_kps
 
     def _get_trajectory(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
@@ -218,6 +262,8 @@ class SlamMapper(CameraMotionMixIn):
             turn_gain=self._config.turn_gain,
         )
         logger.info(f"SLAM running — backend={self._backend}  " "(arrow keys to drive, q to stop)")
+        if self._config.visualize and not self._config.stream:
+            logger.warning("--visualize has no effect with --no-stream (nothing to display it in)")
 
         self._run_start_ts = time.time()
 
@@ -229,7 +275,8 @@ class SlamMapper(CameraMotionMixIn):
                 self._last_frame_ts = ts
                 self._frame_idx += 1
 
-                state = self._process_frame_orbslam2(frame, ts)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                state = self._process_frame_orbslam2(gray, ts)
                 label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
 
                 # get_trajectory_points() walks the whole map and copies it into Python —
@@ -259,10 +306,8 @@ class SlamMapper(CameraMotionMixIn):
                     lambda dt=dt: dt * 1000,
                     lambda label=label: label,
                     lambda traj_info=traj_info: traj_info,
-                    lambda frame=frame, need_diag=need_diag: (
-                        self._frame_diagnostics(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-                        if need_diag
-                        else ""
+                    lambda gray=gray, need_diag=need_diag: (
+                        self._frame_diagnostics(gray) if need_diag else ""
                     ),
                 )
 
@@ -285,11 +330,27 @@ class SlamMapper(CameraMotionMixIn):
                 if self._config.stream and self._server is not None:
                     h, w = frame.shape[:2]
                     scale = 2
-                    self._push_frame(
-                        self._render_map_view(
+                    if self._config.visualize:
+                        keypoints, matches, prev_frame, prev_kps = self._update_visualization(
+                            frame, gray
+                        )
+                        view = self._render_visualization_view(
+                            traj,
+                            frame,
+                            keypoints,
+                            matches,
+                            prev_frame,
+                            prev_kps,
+                            label,
+                            self._backend,
+                            w * scale,
+                            h * scale,
+                        )
+                    else:
+                        view = self._render_map_view(
                             traj, frame, label, self._backend, w * scale, h * scale
                         )
-                    )
+                    self._push_frame(view)
 
         except KeyboardInterrupt:
             pass
@@ -382,4 +443,122 @@ class SlamMapper(CameraMotionMixIn):
         canvas[y1 - 2 : y1 + pip_h + 2, x1 - 2 : x1 + pip_w + 2] = (80, 80, 80)
         canvas[y1 : y1 + pip_h, x1 : x1 + pip_w] = pip
 
+        return canvas
+
+    @staticmethod
+    def _render_features_panel(frame: np.ndarray, keypoints: list) -> np.ndarray:
+        """Camera-frame-sized panel: current frame with detected ORB keypoints circled."""
+        panel = cv2.drawKeypoints(frame, keypoints, None, color=(0, 255, 0))
+        cv2.putText(
+            panel,
+            f"ORB keypoints: {len(keypoints)}",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+        return panel
+
+    @staticmethod
+    def _render_matches_panel(  # pylint: disable=too-many-positional-arguments
+        prev_frame: Optional[np.ndarray],
+        prev_kps: Optional[list],
+        frame: np.ndarray,
+        keypoints: list,
+        matches: list,
+        w: int,
+        h: int,
+    ) -> np.ndarray:
+        """
+        Camera-frame-sized panel: previous and current frame side by side, with
+        lines connecting matched keypoints. Blank (with a status message) until
+        a previous frame exists.
+        """
+        if prev_frame is None:
+            panel = np.zeros((h, w, 3), dtype=np.uint8)
+            cv2.putText(
+                panel,
+                "warming up...",
+                (10, h // 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (100, 100, 100),
+                2,
+                cv2.LINE_AA,
+            )
+            return panel
+
+        combined = cv2.drawMatches(
+            prev_frame,
+            prev_kps,
+            frame,
+            keypoints,
+            matches,
+            None,
+            matchColor=(0, 255, 0),
+            singlePointColor=(0, 0, 255),
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+        )
+        combined = cv2.resize(combined, (w, h))
+        cv2.putText(
+            combined,
+            f"matches: {len(matches)}",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+        return combined
+
+    @staticmethod
+    def _render_visualization_view(  # pylint: disable=too-many-positional-arguments
+        traj: list,
+        frame: np.ndarray,
+        keypoints: list,
+        matches: list,
+        prev_frame: Optional[np.ndarray],
+        prev_kps: Optional[list],
+        state_label: str,
+        backend: str,
+        canvas_w: int,
+        canvas_h: int,
+    ) -> np.ndarray:
+        """
+        2x2 debug view for --visualize: top-down map | live camera
+                                         ORB keypoints | frame-to-frame matches
+        """
+        h, w = frame.shape[:2]
+
+        map_panel = SlamMapper._render_map_view(traj, frame, state_label, backend, w, h)
+
+        cam_panel = frame.copy()
+        color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
+        cv2.putText(
+            cam_panel,
+            f"[{backend}] {state_label}",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+        kp_panel = SlamMapper._render_features_panel(frame, keypoints)
+        match_panel = SlamMapper._render_matches_panel(
+            prev_frame, prev_kps, frame, keypoints, matches, w, h
+        )
+
+        canvas = np.vstack(
+            [
+                np.hstack([map_panel, cam_panel]),
+                np.hstack([kp_panel, match_panel]),
+            ]
+        )
+        if canvas.shape[:2] != (canvas_h, canvas_w):
+            canvas = cv2.resize(canvas, (canvas_w, canvas_h))
         return canvas

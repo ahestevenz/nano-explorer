@@ -101,6 +101,13 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         metavar="GAIN",
         help="Turn gain 0.0-1.0 (default: 0.5)",
     )
+    p_slam.add_argument(
+        "--visualize",
+        action="store_true",
+        default=False,
+        help="Show a 2x2 debug view in the stream: trajectory map, live camera, "
+        "detected ORB keypoints, and frame-to-frame feature matches",
+    )
     p_slam.set_defaults(func=_run_slam)
 
 
