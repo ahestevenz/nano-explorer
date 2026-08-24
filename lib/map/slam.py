@@ -23,12 +23,20 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.settings import PROJECT_ROOT_PATH
+from lib.settings import PROJECT_ROOT_PATH, ensure_user_config, user_config_path
 
 _VALID_BACKENDS = ["orbslam2"]
 
-# Tracking state labels used by ORB-SLAM2
-_ORBSLAM2_STATES = {0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
+# Tracking state labels used by ORB-SLAM2 (ORB_SLAM2::Tracking::eTrackingState)
+_ORBSLAM2_STATES = {-1: "NOT_READY", 0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
+
+# How often (in frames) to log the extra frame-quality diagnostics below —
+# frequent enough to catch a stuck init within a couple seconds, cheap enough
+# (one extra ORB detection pass) not to disturb the frame rate.
+_DIAG_INTERVAL = 30
+# If tracking hasn't left NOT_INIT/NO_IMAGES by this many frames, log one
+# warning pointing at the diagnostics instead of silently looping forever.
+_STALL_WARN_FRAMES = 150
 
 
 class SlamConfig(BaseModel):
@@ -43,15 +51,16 @@ class SlamConfig(BaseModel):
         turn_gain:    Turn gain [0.0, 1.0].
     """
 
-    config_path: Path = PROJECT_ROOT_PATH / "config/models/slam.yaml"
+    config_path: Path = user_config_path("models/slam.yaml")
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
 
-    @validator("config_path")
+    @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
-        if not Path(v).exists():
+        v = ensure_user_config(v)
+        if not v.exists():
             raise ValueError(f"SLAM config not found: {v}\n" "Expected at: config/models/slam.yaml")
         return v
 
@@ -68,6 +77,12 @@ class SlamMapper(CameraMotionMixIn):
         self._config = SlamConfig(**kwargs)
         self._backend = "orbslam2"
         self._slam = None
+        self._frame_idx = 0
+        self._run_start_ts = None
+        self._last_frame_ts = None
+        self._last_state_label = None
+        self._diag_orb = None
+        self._stall_warned = False
 
     def _load(self) -> None:
         import yaml
@@ -90,32 +105,101 @@ class SlamMapper(CameraMotionMixIn):
                 "Build from: https://github.com/raulmur/ORB_SLAM2"
             ) from e
 
-        vocab = cfg.get("vocabulary", "assets/models/ORBvoc.txt")
-        if not Path(vocab).exists():
+        vocab = Path(cfg.get("vocabulary", "assets/models/ORBvoc.txt"))
+        if not vocab.is_absolute():
+            vocab = PROJECT_ROOT_PATH / vocab
+        if not vocab.exists():
             raise FileNotFoundError(
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        settings = cfg.get("settings", "config/models/orbslam2_mono.yaml")
-        if not Path(settings).exists():
+        settings_rel = cfg.get("settings", "config/models/orbslam2_mono.yaml")
+        settings = Path(settings_rel)
+        if not settings.is_absolute():
+            # This one's a config/*.yaml file (camera calibration), not an
+            # assets/ blob like vocab above — route it through the same
+            # user-config seeding as every other config_path, so a hand-tuned
+            # calibration survives a package upgrade. Anything relative but
+            # NOT rooted at "config/" (a custom path someone set explicitly)
+            # falls back to plain PROJECT_ROOT_PATH anchoring.
+            settings = (
+                ensure_user_config(user_config_path(settings_rel[len("config/") :]))
+                if settings_rel.startswith("config/")
+                else PROJECT_ROOT_PATH / settings
+            )
+        if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM2 settings not found: {settings}\n"
                 "Create camera calibration YAML at config/models/orbslam2_mono.yaml"
             )
-        self._slam = orbslam2.System(vocab, settings, orbslam2.Sensor.MONOCULAR)
+        self._slam = orbslam2.System(str(vocab), str(settings), orbslam2.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
+        # System() only records the vocab/settings paths — initialize() is what actually
+        # loads the ORB vocabulary and starts tracking/mapping/loop-closing. Without this
+        # call process_image_mono() runs against a system that was never started, so the
+        # tracking state stays NO_IMAGES_YET forever regardless of what frames come in.
+        self._slam.initialize()
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
     def _process_frame_orbslam2(self, frame: np.ndarray, timestamp: float) -> int:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        state = self._slam.process_image_mono(gray, timestamp)
-        return int(state)
+        # process_image_mono() returns a bool — whether *this frame* tracked
+        # successfully — not the tracking-state enum. Casting that bool through
+        # _ORBSLAM2_STATES only ever produced NO_IMAGES(0)/NOT_INIT(1); OK/LOST
+        # could never appear. get_tracking_state() is the real state accessor.
+        self._slam.process_image_mono(gray, timestamp)
+        return int(self._slam.get_tracking_state())
+
+    def _frame_diagnostics(self, gray: np.ndarray) -> str:
+        """
+        Independent-of-ORBSLAM2 frame health check: brightness/contrast and a plain
+        cv2 ORB feature count. The orbslam2 Python bindings expose no accessor for
+        how many features/matches *it* found on a given frame, so this runs a
+        second, throwaway ORB pass purely to tell "camera delivering unusable frames"
+        (black/blown-out/blurry/low-texture — nfeatures near 0) apart from "frames
+        look fine but motion is degenerate for triangulation" (nfeatures healthy,
+        tracking still stuck in NOT_INIT) without needing the C++ side instrumented.
+        """
+        if self._diag_orb is None:
+            self._diag_orb = cv2.ORB_create(nfeatures=500)
+        mean, std = cv2.meanStdDev(gray)
+        keypoints = self._diag_orb.detect(gray, None)
+        return (
+            f"  shape={gray.shape[::-1]}  brightness={mean[0, 0]:.0f}±{std[0, 0]:.0f}"
+            f"  cv2_orb_kpts={len(keypoints)}"
+        )
 
     def _get_trajectory(self) -> list:
+        # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
+        # returns one 13-element tuple per processed frame:
+        #   (timestamp, R00,R01,R02,t0, R10,R11,R12,t1, R20,R21,R22,t2)
+        # — a flattened 3x4 [R|t] pose with the timestamp prepended, NOT a 4x4 SE3 matrix
+        # or a flat 16-element sequence. Rebuild the 4x4 here so every consumer can rely
+        # on pose[0, 3] / pose[2, 3] indexing (_last_pose_xz, _render_map_view) instead of
+        # unpacking the raw tuple itself.
         try:
-            return self._slam.get_trajectory_points()
+            poses = []
+            for raw in self._slam.get_trajectory_points():
+                pose = np.eye(4)
+                pose[:3, :4] = np.asarray(raw[1:], dtype=np.float64).reshape(3, 4)
+                poses.append(pose)
+            return poses
         except Exception:  # pylint: disable=broad-except
             return []
+
+    @staticmethod
+    def _last_pose_xz(traj: list) -> str:
+        """Last (x, z) from the trajectory, formatted for logging, or '' if unavailable."""
+        if not traj:
+            return ""
+        # Defensive on top of _get_trajectory()'s own normalization: this is a debug-log
+        # convenience, not core tracking — an unexpected pose shape must never crash a
+        # working SLAM run over a nice-to-have log field.
+        try:
+            pose = traj[-1]
+            return f"  pos=({pose[0, 3]:+.2f},{pose[2, 3]:+.2f})"
+        except (IndexError, TypeError):
+            return ""
 
     def run(self) -> None:
         import time
@@ -135,17 +219,70 @@ class SlamMapper(CameraMotionMixIn):
         )
         logger.info(f"SLAM running — backend={self._backend}  " "(arrow keys to drive, q to stop)")
 
+        self._run_start_ts = time.time()
+
         try:
             while not _stop.is_set():
                 frame = cam.read()
                 ts = time.time()
+                dt = ts - self._last_frame_ts if self._last_frame_ts is not None else 0.0
+                self._last_frame_ts = ts
+                self._frame_idx += 1
 
                 state = self._process_frame_orbslam2(frame, ts)
                 label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
-                logger.debug(f"ORB-SLAM2 state={label}")
+
+                # get_trajectory_points() walks the whole map and copies it into Python —
+                # not free, and it grows as the map does. Only pay for it on frames where
+                # it's actually used (a state change, or an active stream), not every frame.
+                state_changed = label != self._last_state_label
+                need_traj = state_changed or (self._config.stream and self._server is not None)
+                traj = self._get_trajectory() if need_traj else []
+
+                if state_changed:
+                    logger.info(
+                        f"ORB-SLAM2 state changed: {self._last_state_label} -> {label}  "
+                        f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s)"
+                    )
+                    self._last_state_label = label
+
+                traj_info = f"  poses={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
+                need_diag = state_changed or self._frame_idx % _DIAG_INTERVAL == 0
+
+                # opt(lazy=True) defers evaluating every arg (incl. calling
+                # _frame_diagnostics, which does a real ORB pass over the frame)
+                # until loguru confirms a DEBUG-level sink is actually active —
+                # so this costs nothing when only INFO/WARNING are enabled.
+                logger.opt(lazy=True).debug(
+                    "ORB-SLAM2 frame={}  dt={:.0f}ms  state={}{}{}",
+                    lambda: self._frame_idx,
+                    lambda dt=dt: dt * 1000,
+                    lambda label=label: label,
+                    lambda traj_info=traj_info: traj_info,
+                    lambda frame=frame, need_diag=need_diag: (
+                        self._frame_diagnostics(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                        if need_diag
+                        else ""
+                    ),
+                )
+
+                if (
+                    label in ("NOT_INIT", "NO_IMAGES")
+                    and self._frame_idx == _STALL_WARN_FRAMES
+                    and not self._stall_warned
+                ):
+                    self._stall_warned = True
+                    logger.warning(
+                        f"ORB-SLAM2 still {label} after {_STALL_WARN_FRAMES} frames. "
+                        "Re-run with DEBUG logging enabled to see the per-frame diagnostics: "
+                        "cv2_orb_kpts near 0 means the camera feed itself is unusable "
+                        "(dark/blurry/low-texture); a healthy keypoint count with no init "
+                        "means the motion so far is degenerate for triangulation — drive "
+                        "with forward/backward translation, not pure in-place turns, "
+                        "until state changes to OK."
+                    )
 
                 if self._config.stream and self._server is not None:
-                    traj = self._get_trajectory()
                     h, w = frame.shape[:2]
                     scale = 2
                     self._push_frame(
@@ -208,8 +345,11 @@ class SlamMapper(CameraMotionMixIn):
                 for i in range(1, len(pts)):
                     cv2.line(canvas, pts[i - 1], pts[i], (0, 180, 0), 1)
                 cv2.circle(canvas, pts[-1], 5, (0, 255, 0), -1)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as e:  # pylint: disable=broad-except
+                # Plotting is best-effort and must never take the stream down, but a
+                # silent `pass` here is exactly what hid the pose-shape bug for two
+                # rounds — log it so a bad frame is visible instead of just blank.
+                logger.debug(f"Map view render skipped this frame: {e}")
 
         color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
         cv2.putText(

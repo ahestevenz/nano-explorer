@@ -1,0 +1,9 @@
+# Per-wheel power trim — corrects forward-drift caused by motor manufacturing
+# variance. Multiplicative, applied via jetbot.Robot's left/right_motor_alpha,
+# so it can only ever scale a commanded speed down, never above what was
+# requested. 1.0 = no correction.
+#
+# Written by tools/calibrate_motors.py — see that script's docstring for the
+# calibration procedure. Safe to edit by hand too.
+left_trim: 1.0
+right_trim: 1.0

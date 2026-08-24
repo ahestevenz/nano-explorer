@@ -101,7 +101,7 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         type=float,
         default=settings.collision_threshold,
         metavar="T",
-        help="Blocked probability threshold (default: 0.5)",
+        help="Blocked probability threshold (default: 0.6)",
     )
     p_col.add_argument(
         "--speed",

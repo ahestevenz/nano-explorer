@@ -32,6 +32,7 @@ Controls (stdin mode):
 """
 
 import os
+import select
 import sys
 import threading
 import time
@@ -55,6 +56,11 @@ _KEY_TIMEOUT: float = 0.15
 _SLEEP_TIME: float = 0.05
 _TIME_OUT: float = 0.05
 _NUMBER_BYTES_TO_READ: int = 3
+
+# How long (seconds) to hold onto an incomplete escape sequence (e.g. only the
+# leading \x1b has arrived so far) before giving up and discarding it as stale —
+# covers a lone ESC keypress, or a genuinely dropped byte.
+_PARTIAL_SEQ_TIMEOUT: float = 0.1
 
 
 def _import_keyboard() -> Any:
@@ -154,6 +160,46 @@ class TeleopConfig(BaseModel):
         return v
 
 
+class _ArrowKeyReader:
+    """
+    Assembles raw terminal bytes into one resolved teleop action per call.
+
+    Arrow keys arrive as a 3-byte escape sequence (\x1b[A etc.), but a single
+    os.read() call isn't guaranteed to return all 3 bytes at once — under load
+    (e.g. a CPU-heavy vision/SLAM loop sharing this process) it can wake up
+    after only 1 or 2 bytes have arrived. This buffers across reads until a
+    full sequence (or a single-byte q/Q/Ctrl-C) is assembled, instead of
+    comparing a possibly-partial chunk directly and silently dropping the key.
+    """
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+        self._pending = b""
+        self._pending_since: Optional[float] = None
+
+    def read_action(self) -> Optional[str]:
+        """One polling cycle: returns a resolved action, "__quit__", or None."""
+        ready, _, _ = select.select([sys.stdin], [], [], _TIME_OUT)
+        if not ready:
+            if self._pending and time.time() - self._pending_since > _PARTIAL_SEQ_TIMEOUT:
+                self._pending, self._pending_since = b"", None
+            return None
+
+        self._pending += os.read(self._fd, _NUMBER_BYTES_TO_READ - len(self._pending))
+        if self._pending_since is None:
+            self._pending_since = time.time()
+
+        if self._pending[:1] != b"\x1b":
+            chunk, self._pending, self._pending_since = self._pending, b"", None
+            return "__quit__" if chunk in (b"q", b"Q", b"\x03") else None
+
+        if len(self._pending) < _NUMBER_BYTES_TO_READ:
+            return None  # escape sequence still incomplete — wait for the rest
+
+        chunk, self._pending, self._pending_since = self._pending, b"", None
+        return _ARROW_MAP.get(chunk)
+
+
 class TeleopController(CameraMotionMixIn):
     """
     Keyboard-driven teleoperation controller.
@@ -213,7 +259,6 @@ class TeleopController(CameraMotionMixIn):
             "         Hold key -> move  |  Release -> stop\n"
         )
 
-        import select
         import termios
         import tty
 
@@ -235,6 +280,9 @@ class TeleopController(CameraMotionMixIn):
             stop_timer.daemon = True
             stop_timer.start()
 
+        fd = sys.stdin.fileno()
+        key_reader = _ArrowKeyReader(fd)
+
         # Cosmetic: fix log line alignment in raw terminal mode
         # tty.setraw() strips carriage returns from stderr, causing loguru output
         # to start mid-line when the robot is idle. We temporarily replace the
@@ -245,22 +293,17 @@ class TeleopController(CameraMotionMixIn):
 
         logger.remove()
         raw_id = logger.add(_raw_sink, colorize=True)
-        fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
 
         try:
             tty.setraw(fd)
             while not _stop.is_set():
-                ready, _, _ = select.select([sys.stdin], [], [], _TIME_OUT)
-                if not ready:
-                    continue
-                chunk = os.read(fd, _NUMBER_BYTES_TO_READ)
-                if chunk in (b"q", b"Q", b"\x03"):
-                    _stop.set()
-                    break
-                action = _ARROW_MAP.get(chunk)
+                action = key_reader.read_action()
                 if action is None:
                     continue
+                if action == "__quit__":
+                    _stop.set()
+                    break
                 self._apply_action(action)
                 _schedule_stop()
         except Exception as exc:
@@ -390,5 +433,9 @@ class TeleopController(CameraMotionMixIn):
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
-        sys.stdout.write(f"\r[teleop] {action:<10}  speed={self._config.speed:.2f}\r\n")
+        # left/right send turn_speed (speed * turn_gain) to the motors, not the raw
+        # linear speed — log the value actually applied, not always self._config.speed,
+        # so this line can be trusted when debugging speed/turn-gain settings.
+        applied_speed = turn_speed if action in ("left", "right") else self._config.speed
+        sys.stdout.write(f"\r[teleop] {action:<10}  speed={applied_speed:.2f}\r\n")
         sys.stdout.flush()

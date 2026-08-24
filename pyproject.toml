@@ -30,6 +30,7 @@ dependencies = [
     "aiohttp-cors",
     "tqdm",
     "pydantic>=1.9,<2.0",      # v2 renames @validator → @field_validator; keep v1 API
+    "python-dotenv",           # required by pydantic's Config.env_file (NanoSettings)
     "click",
 ]
 

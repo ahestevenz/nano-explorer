@@ -89,7 +89,7 @@ class CollisionConfig(BaseModel):
     hf_filename: str = DEFAULT_COLLISION_MODEL_HF_FILENAME
     hf_revision: str = DEFAULT_COLLISION_MODEL_HF_REVISION
     model_path: Path = DEFAULT_COLLISION_MODEL_PATH
-    threshold: float = Field(0.5, ge=0.0, le=1.0)
+    threshold: float = Field(0.6, ge=0.0, le=1.0)
     speed: float = Field(0.3, ge=0.0, le=1.0)
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
@@ -129,7 +129,8 @@ class CollisionConfig(BaseModel):
                 f"{source}\n"
                 "\n"
                 "Fix it one of these ways:\n"
-                "  1. Train a model:  python tools/train_collision_avoidance.py "
+                "  1. Train a model (see github.com/ahestevenz/nano-explorer-ml-tools):\n"
+                "       python collision_avoidance/train_collision_avoidance.py "
                 "--dataset <dataset_dir>\n"
                 "  2. Copy an existing .pth to that path\n"
                 "  3. Point at a different model:\n"

@@ -60,7 +60,31 @@ except ImportError:
     )
 
 
+from typing import Tuple
+
+import yaml
 from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
+
+from lib.settings import NanoSettings, ensure_user_config
+
+
+def _load_trim() -> Tuple[float, float]:
+    """
+    Read (left_trim, right_trim) from NanoSettings().motor_trim_config_path
+    (~/.nano-explorer/config/motors/trim.yaml — seeded from the bundled
+    default the first time this runs), defaulting to (1.0, 1.0) if even the
+    bundled default is somehow missing. Deliberately a plain YAML read, not
+    a pydantic env-settings field — a real (exported) shell env var silently
+    overrides a same-named .env file entry, which made a stale export
+    indistinguishable from a freshly-calibrated value. See
+    tools/calibrate_motors.py and config/motors/trim.yaml.
+    """
+    path = ensure_user_config(NanoSettings().motor_trim_config_path)
+    if not path.exists():
+        return 1.0, 1.0
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    return float(cfg.get("left_trim", 1.0)), float(cfg.get("right_trim", 1.0))
 
 
 class WheelSpeeds(BaseModel):
@@ -75,19 +99,45 @@ class MotorController:
     All speed values are floats in [0.0, 1.0].
     In DRY-RUN mode (jetbot not installed) every call is logged but
     no hardware is touched.
+
+    Args:
+        left_trim:  Per-wheel power trim [0.0, 1.0], applied via jetbot's
+                    left_motor_alpha. Defaults to the value in
+                    config/motors/trim.yaml (1.0 = no correction) if not
+                    given. See tools/calibrate_motors.py.
+        right_trim: Same, for the right wheel.
     """
 
-    def __init__(self):
+    def __init__(self, left_trim: float = None, right_trim: float = None):
         self._robot = None
         self._dry_run = not _HW_AVAILABLE
+        default_left, default_right = _load_trim()
+        self._left_trim = default_left if left_trim is None else left_trim
+        self._right_trim = default_right if right_trim is None else right_trim
 
     def open(self) -> None:
         """Initialise the JetBot Robot instance."""
         if self._dry_run:
             logger.warning("DRY-RUN: MotorController.open() skipped.")
             return
-        self._robot = InvertedRobot()
-        logger.success("MotorController ready (jetbot.Robot)")
+        self._robot = InvertedRobot(
+            left_motor_alpha=self._left_trim, right_motor_alpha=self._right_trim
+        )
+        logger.success(
+            f"MotorController ready (jetbot.Robot)  "
+            f"trim: left={self._left_trim:.3f}  right={self._right_trim:.3f}"
+        )
+
+    def set_trim(self, left_trim: float, right_trim: float) -> None:
+        """Update per-wheel power trim live — takes effect on the next motor command."""
+        self._left_trim = left_trim
+        self._right_trim = right_trim
+        if self._dry_run:
+            logger.debug(f"DRY-RUN set_trim: left={left_trim:.3f}  right={right_trim:.3f}")
+            return
+        if self._robot is not None:
+            self._robot.left_motor.alpha = left_trim
+            self._robot.right_motor.alpha = right_trim
 
     def close(self) -> None:
         """Stop motors and release the Robot instance."""

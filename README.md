@@ -69,11 +69,60 @@ nano-explorer motion stream --width W --height H --fps FPS
 # Collision avoidance — stream on by default
 nano-explorer motion collision
 nano-explorer motion collision --model PATH            # path to .pth or .engine
-nano-explorer motion collision --threshold T           # blocked probability threshold (default: 0.5)
+nano-explorer motion collision --threshold T           # blocked probability threshold (default: 0.6)
 nano-explorer motion collision --speed SPEED
 nano-explorer motion collision --stream-port PORT
 nano-explorer motion collision --no-stream
 ```
+
+#### Motor calibration
+
+Cheap DC gear motors commonly differ 5-15% in actual speed at the same commanded value, even
+between two units of the same model — `lib/motor.py` sends both wheels the same speed with no
+compensation, so this shows up as the robot arcing to one side when told to drive straight.
+Calibrate a per-wheel power trim to fix it:
+
+```bash
+python tools/calibrate_motors.py --wheelbase 10.4              # wheelbase in cm is required
+python tools/calibrate_motors.py --wheelbase 10.4 --speed 0.3 --duration 2.0   # defaults shown
+```
+
+`--wheelbase` is the distance between the two wheels' ground-contact points, in centimetres —
+measure it once with a ruler or calipers (it doesn't change unless you change the chassis).
+There's no baked-in default, since a wrong wheelbase silently skews the whole calibration.
+
+This works by **measuring, not guessing**: rather than eyeballing live drift and nudging a trim
+value key-press by key-press (hard to do well — you can't watch the robot and react on a
+keyboard in the same instant), it drives a fixed, repeatable test and asks you to measure the
+result with a tape measure. From that measurement plus the wheelbase, it computes the exact
+trim correction directly from differential-drive kinematics — no guessing, and it converges in
+1-2 test drives instead of many:
+
+1. Mark a straight reference line on the floor (tape, a rug seam, a row of tiles) with ~2m of
+   clear space ahead, and place the robot's center at one end, facing along it.
+2. Press ENTER to run a test drive (forward at `--speed` for `--duration`).
+3. Once it stops, measure with a tape measure and enter when prompted: how far forward it
+   travelled along the line, and how far off the line it ended up (and to which side — judged
+   from where you *started*, watching it drive away, same frame as the teleop arrow keys; not
+   from wherever you're standing after walking up to it to measure, which is mirrored).
+4. The tool computes and applies the corrected trim from those two numbers.
+5. Press ENTER again to run a verification drive with the new trim — it should track much
+   closer to the line now. Repeat steps 3-5 once more to refine further if needed.
+6. Press `s` + ENTER to save — writes `left_trim` / `right_trim` to
+   `~/.nano-explorer/config/motors/trim.yaml` (backing up any existing file first), which every
+   command using `MotorController` then picks up automatically. Press `q` + ENTER at any point
+   to quit without saving.
+
+Trim lives in `~/.nano-explorer/config/motors/trim.yaml`, not `~/.nano-explorer.env` — a real
+(exported) shell env var silently overrides a same-named `.env` file entry in pydantic's
+`BaseSettings`, which made a stale export from an earlier debugging session indistinguishable
+from a freshly calibrated value. A plain YAML file read directly has no such hidden precedence.
+It also isn't the package's own bundled `config/motors/trim.yaml` — that's just the default
+copied into `~/.nano-explorer/config/` the first time it's needed, so a `pip install --upgrade`
+can never wipe a calibrated trim. See `config/README.md` for the full mechanism.
+
+See the script's docstring for the kinematics derivation and the small-angle approximation it
+relies on.
 
 ### Computer Vision & Detection
 
@@ -83,7 +132,7 @@ with arrow keys simultaneously. Pass `--no-stream` to disable the stream.
 ```bash
 # Object detection (jetson-inference or OpenCV DNN)
 nano-explorer vision detect
-nano-explorer vision detect --config YAML              # model config (default: config/models/detection.yaml)
+nano-explorer vision detect --config YAML              # model config (default: ~/.nano-explorer/config/models/detection.yaml)
 nano-explorer vision detect --threshold T              # confidence threshold (default: 0.5)
 nano-explorer vision detect --speed SPEED --turn-gain GAIN
 nano-explorer vision detect --stream-port PORT
@@ -91,7 +140,7 @@ nano-explorer vision detect --no-stream
 
 # Face and people detection
 nano-explorer vision faces
-nano-explorer vision faces --config YAML               # model config (default: config/models/face.yaml)
+nano-explorer vision faces --config YAML               # model config (default: ~/.nano-explorer/config/models/face.yaml)
 nano-explorer vision faces --speed SPEED --turn-gain GAIN
 nano-explorer vision faces --stream-port PORT
 nano-explorer vision faces --no-stream
@@ -107,14 +156,14 @@ nano-explorer vision track --no-stream
 
 # Semantic segmentation (jetson-inference segNet)
 nano-explorer vision segment
-nano-explorer vision segment --config YAML             # model config (default: config/models/segmentation.yaml)
+nano-explorer vision segment --config YAML             # model config (default: ~/.nano-explorer/config/models/segmentation.yaml)
 nano-explorer vision segment --speed SPEED --turn-gain GAIN
 nano-explorer vision segment --stream-port PORT
 nano-explorer vision segment --no-stream
 
 # Human pose estimation (trt_pose)
 nano-explorer vision pose
-nano-explorer vision pose --config YAML                # model config (default: config/models/pose.yaml)
+nano-explorer vision pose --config YAML                # model config (default: ~/.nano-explorer/config/models/pose.yaml)
 nano-explorer vision pose --speed SPEED --turn-gain GAIN
 nano-explorer vision pose --stream-port PORT
 nano-explorer vision pose --no-stream
@@ -163,7 +212,7 @@ Stream is **on by default** for all commands. Arrow keys drive the robot while t
 ```bash
 # Colour-line following (classical HSV threshold)
 nano-explorer nav line-follow
-nano-explorer nav line-follow --config YAML            # config (default: config/models/line_follow.yaml)
+nano-explorer nav line-follow --config YAML            # config (default: ~/.nano-explorer/config/models/line_follow.yaml)
 nano-explorer nav line-follow --speed SPEED            # forward speed 0.0-1.0 (default: 0.3)
 nano-explorer nav line-follow --turn-gain GAIN         # differential turn gain 0.0-1.0 (default: 0.5)
 nano-explorer nav line-follow --stream-port PORT
@@ -179,7 +228,7 @@ nano-explorer nav road-follow --no-stream
 
 # AprilTag / ArUco fiducial marker navigation
 nano-explorer nav apriltag
-nano-explorer nav apriltag --config YAML               # config (default: config/models/apriltag.yaml)
+nano-explorer nav apriltag --config YAML               # config (default: ~/.nano-explorer/config/models/apriltag.yaml)
 nano-explorer nav apriltag --speed SPEED
 nano-explorer nav apriltag --turn-gain GAIN
 nano-explorer nav apriltag --stream-port PORT
@@ -193,7 +242,7 @@ nano-explorer nav apriltag --no-stream
 ```bash
 # Monocular visual odometry (ORB / SIFT / AKAZE feature tracking)
 nano-explorer map odometry
-nano-explorer map odometry --config YAML               # config (default: config/models/odometry.yaml)
+nano-explorer map odometry --config YAML               # config (default: ~/.nano-explorer/config/models/odometry.yaml)
 nano-explorer map odometry --speed SPEED               # motor speed 0.0-1.0 (default: 0.3)
 nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map odometry --stream-port PORT
@@ -202,137 +251,50 @@ nano-explorer map odometry --no-stream
 # Monocular SLAM — ORB-SLAM2 backend
 # Stream shows a live top-down trajectory map with camera picture-in-picture
 nano-explorer map slam
-nano-explorer map slam --config YAML                   # config (default: config/models/slam.yaml)
+nano-explorer map slam --config YAML                   # config (default: ~/.nano-explorer/config/models/slam.yaml)
 nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
 nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
 ```
 
+##### Camera calibration
+
+`~/.nano-explorer/config/models/orbslam2_mono.yaml` (seeded on first use from the package's
+bundled default) ships with placeholder intrinsics (`fx=fy=700, cx=320, cy=240`, zero
+distortion). Monocular ORB-SLAM2's initialization is sensitive to these being close to
+correct — wrong values are a common reason it keeps rejecting its own initial map
+(`Wrong initialization, reseting...`). Calibrate against a printed checkerboard before your first
+`map slam` run:
+
+```bash
+# Runs on the Nano — needs the camera. Streams live corner detection over MJPEG so you
+# can position the board without a monitor attached.
+python tools/calibrate_camera.py
+python tools/calibrate_camera.py --board-cols 9 --board-rows 6 --samples 15  # defaults shown
+python tools/calibrate_camera.py --camera usb --stream-port 8090
+python tools/calibrate_camera.py --update-config   # back up + patch orbslam2_mono.yaml in place
+python tools/calibrate_camera.py --apply-from ~/.nano-explorer/config/models/orbslam2_mono.calibrated.yaml
+                                                    # re-apply a previous result, no recapture
+```
+
+Open the printed stream URL, hold the checkerboard in view, press `c` to capture each sample
+(needs a detected board), and `q` when done to run the fit. See the script's docstring for the
+full step-by-step procedure and guidance on how many captures to take.
+
 ---
 
 ## Data Pipeline Tools
 
-Scripts in `tools/` run **on your laptop** (or any machine with PyTorch + torchvision installed) to collect training data and train models that are then copied to the Nano.
+Data collection and training scripts for nano-explorer's ML models (collision avoidance,
+road following) now live in a separate repo:
+[nano-explorer-ml-tools](https://github.com/ahestevenz/nano-explorer-ml-tools).
 
-### Collect collision-avoidance data
-
-Drive the robot into position, then snapshot frames labelled **free** or **blocked**.
-
-```bash
-python tools/collect_collision_data.py --out datasets/collision_001
-
-# Options
-#   --speed        Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
-#   --camera       csi | usb                   (default: csi)
-#   --stream       Enable MJPEG stream         (default: off)
-#   --stream-port  MJPEG server port           (default: 8080)
-
-# With live preview in browser
-python tools/collect_collision_data.py --out datasets/collision_001 --stream
-```
-
-**Key bindings while running:**
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓ ← →` | Drive the robot |
-| `f` | Capture frame → `free/` |
-| `b` | Capture frame → `blocked/` |
-| `q` / Ctrl-C | Quit |
-
-Output layout:
-```
-datasets/collision_001/
-  free/
-    img_000001.jpg …
-  blocked/
-    img_000001.jpg …
-```
-
-Resuming is automatic — re-running the same `--out` path picks up where you left off.
-
----
-
-### Train the collision-avoidance model
-
-```bash
-python tools/train_collision_avoidance.py --dataset datasets/collision_001
-
-# Options
-#   --output     Output .pth path  (default: assets/models/collision_avoidance.pth)
-#   --epochs     Training epochs   (default: 15)
-#   --lr         Learning rate     (default: 1e-4)
-#   --batch-size Mini-batch size   (default: 32)
-#   --val-split  Validation ratio  (default: 0.15)
-#   --seed       Random seed       (default: 42)
-```
-
-Trains a **ResNet18 binary classifier** (`free=0`, `blocked=1`).
-Best checkpoint (highest val accuracy) is saved automatically.
-The saved weights are loaded by `nano-explorer nav collision-avoid`.
-
----
-
-### Collect road-following data
-
-Drive the robot along the track while frames are captured at a fixed rate and labelled with the current steering angle.
-
-```bash
-python tools/collect_road_data.py --out datasets/road_001
-
-# Options
-#   --speed        Motor speed [0, 1]          (default: 0.25)
-#   --turn-gain    Turn speed multiplier [0,1] (default: 0.60)
-#   --fps          Frame capture rate (Hz)     (default: 10)
-#   --camera       csi | usb                   (default: csi)
-#   --stream       Enable MJPEG stream         (default: off)
-#   --stream-port  MJPEG server port           (default: 8080)
-
-# With live preview in browser
-python tools/collect_road_data.py --out datasets/road_001 --stream
-```
-
-**Key bindings while running:**
-
-| Key | Steering angle saved |
-|-----|---------------------|
-| `↑` | `0.0` (straight) |
-| `←` | `-1.0` (full left) |
-| `→` | `+1.0` (full right) |
-| `q` / Ctrl-C | Quit |
-
-Frames are only written while a key is **held** (robot moving). Reverse (`↓`) is ignored.
-
-Output layout:
-```
-datasets/road_001/
-  labels.csv        # filename,angle
-  img_000001.jpg …
-```
-
-Appends to an existing `labels.csv` so sessions can be resumed.
-
----
-
-### Train the road-following model
-
-```bash
-python tools/train_road_follower.py --dataset datasets/road_001
-
-# Options
-#   --output     Output .pth path  (default: assets/models/road_follower.pth)
-#   --epochs     Training epochs   (default: 20)
-#   --lr         Learning rate     (default: 1e-4)
-#   --batch-size Mini-batch size   (default: 32)
-#   --val-split  Validation ratio  (default: 0.15)
-#   --seed       Random seed       (default: 42)
-```
-
-Trains a **ResNet18 regression model** (single output: steering angle ∈ [-1, 1]).
-Best checkpoint (lowest val MSE loss) is saved automatically.
-The saved weights are loaded by `nano-explorer nav road-follow`.
+Training scripts there are portable (any machine with PyTorch); collection scripts drive
+the physical robot, so they need nano-explorer installed editable in the same environment
+(`pip install -e /path/to/nano-explorer`) and must run on the Nano. See that repo's README
+for full usage. Trained `.pth` files get copied into this repo's `assets/models/` (or pointed
+at directly via `--model` / the relevant `NANO_*_MODEL_PATH` env var) once ready.
 
 ---
 
