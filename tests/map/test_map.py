@@ -7,6 +7,11 @@ Run with:
     pytest tests/map/ -v -m "not hardware"
 """
 
+# pylint: disable=redefined-outer-name
+# Every test below that takes `fake_project_env` as a parameter is pytest's
+# fixture-injection pattern, not a real shadowing of the fixture function
+# defined at module scope — pylint can't tell the two apart.
+
 import argparse
 import os
 from unittest.mock import MagicMock, patch
@@ -37,6 +42,32 @@ def _parse(args: list, settings: NanoSettings = None) -> argparse.Namespace:
 
 def _dummy_frame(h=480, w=640) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+@pytest.fixture
+def fake_project_env(tmp_path, monkeypatch):
+    """
+    Isolated fake PROJECT_ROOT_PATH + USER_CONFIG_DIR for testing
+    SlamMapper._resolve_vocab_and_settings without touching the real package
+    config/ or ~/.nano-explorer/config/. Returns (project_root, user_config_dir).
+    """
+    import lib.map.slam as slam_mod
+    import lib.settings as settings_mod
+
+    project_root = tmp_path / "project"
+    user_config_dir = tmp_path / "home" / ".nano-explorer" / "config"
+    (project_root / "config" / "models").mkdir(parents=True)
+    (project_root / "assets" / "models").mkdir(parents=True)
+    (project_root / "config" / "models" / "orbslam3_mono.yaml").write_text(
+        "Camera.type: PinHole\nCamera.fx: 111.0\n", encoding="utf-8"
+    )
+    (project_root / "assets" / "models" / "ORBvoc.txt").write_text("fake vocab", encoding="utf-8")
+
+    monkeypatch.setattr(settings_mod, "USER_CONFIG_DIR", user_config_dir)
+    monkeypatch.setattr(settings_mod, "PROJECT_ROOT_PATH", project_root)
+    monkeypatch.setattr(slam_mod, "PROJECT_ROOT_PATH", project_root)
+
+    return project_root, user_config_dir
 
 
 # commands/mapping.py — sub-command structure
@@ -410,3 +441,268 @@ class TestSlamVisualization:
             [], frame, [], [], None, None, None, "NOT_INIT", "orbslam2", 1280, 960
         )
         assert out.shape == (960, 1280, 3)
+
+
+# lib/map/slam.py — ORB-SLAM2/3 backend selection and shared state constants
+class TestBackendConstants:
+    def test_valid_backends_includes_both(self):
+        from lib.map.slam import _VALID_BACKENDS
+
+        assert ["orbslam2", "orbslam3"] == _VALID_BACKENDS
+
+    def test_orbslam2_states_unchanged(self):
+        from lib.map.slam import _ORBSLAM2_STATES
+
+        assert {
+            -1: "NOT_READY",
+            0: "NO_IMAGES",
+            1: "NOT_INIT",
+            2: "OK",
+            3: "LOST",
+        } == _ORBSLAM2_STATES
+
+    def test_orbslam3_states_diverge_from_orbslam2_at_3(self):
+        from lib.map.slam import _ORBSLAM3_STATES
+
+        assert {
+            -1: "NOT_READY",
+            0: "NO_IMAGES",
+            1: "NOT_INIT",
+            2: "OK",
+            3: "RECENTLY_LOST",
+            4: "LOST",
+            5: "OK_KLT",
+        } == _ORBSLAM3_STATES
+
+    def test_states_share_the_common_prefix_by_identity(self):
+        # Both dicts are built from _STATES_COMMON — assert the shared keys
+        # actually come from the same object, not two independently
+        # hand-written copies that could drift apart.
+        from lib.map.slam import _ORBSLAM2_STATES, _ORBSLAM3_STATES, _STATES_COMMON
+
+        for key, value in _STATES_COMMON.items():
+            assert _ORBSLAM2_STATES[key] == value
+            assert _ORBSLAM3_STATES[key] == value
+
+    def test_backend_labels(self):
+        from lib.map.slam import _BACKEND_LABELS
+
+        assert {"orbslam2": "ORB-SLAM2", "orbslam3": "ORB-SLAM3"} == _BACKEND_LABELS
+
+
+class TestLoadDispatch:
+    def test_load_dispatches_to_orbslam3(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: orbslam3\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+        mapper._load_orbslam2 = MagicMock()
+        mapper._load_orbslam3 = MagicMock()
+
+        mapper._load()
+
+        mapper._load_orbslam3.assert_called_once()
+        mapper._load_orbslam2.assert_not_called()
+
+    def test_load_dispatches_to_orbslam2_by_default(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: orbslam2\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+        mapper._load_orbslam2 = MagicMock()
+        mapper._load_orbslam3 = MagicMock()
+
+        mapper._load()
+
+        mapper._load_orbslam2.assert_called_once()
+        mapper._load_orbslam3.assert_not_called()
+
+    def test_load_rejects_invalid_backend(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: rtabmap\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+
+        with pytest.raises(ValueError, match="backend must be one of"):
+            mapper._load()
+
+    def test_load_orbslam3_missing_bindings_raises(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        # pyorbslam isn't installed in this test environment (unlike orbslam2,
+        # which conftest.py mocks away) — this exercises the real ImportError path.
+        with pytest.raises(RuntimeError, match="pyorbslam"):
+            mapper._load_orbslam3({})
+
+
+# lib/map/slam.py — vocab/settings path resolution (relative vs. absolute,
+# and whether a config lands in ~/.nano-explorer/config vs. the package's own)
+class TestResolveVocabAndSettings:
+    def test_relative_config_path_seeds_user_config_dir(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, user_config_dir = fake_project_env
+
+        _, settings = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+
+        assert settings == user_config_dir / "models" / "orbslam3_mono.yaml"
+        assert settings.exists()
+        assert settings.read_text(encoding="utf-8") == (
+            project_root / "config" / "models" / "orbslam3_mono.yaml"
+        ).read_text(encoding="utf-8")
+
+    def test_user_edit_survives_a_second_resolve(self, fake_project_env):
+        # fake_project_env's monkeypatching is what makes _resolve_vocab_and_settings
+        # resolve into tmp_path at all here — the fixture's return value isn't needed.
+        del fake_project_env
+        from lib.map.slam import SlamMapper
+
+        _, settings = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+        settings.write_text(
+            "Camera.type: PinHole\nCamera.fx: 999.0  # user-tuned\n", encoding="utf-8"
+        )
+
+        _, settings2 = SlamMapper._resolve_vocab_and_settings(
+            {}, "config/models/orbslam3_mono.yaml"
+        )
+
+        assert settings2 == settings
+        assert "999.0" in settings2.read_text(encoding="utf-8")
+
+    def test_absolute_settings_path_used_as_is(self, fake_project_env, tmp_path):
+        # Same as above — fake_project_env is here only for its monkeypatching side effect.
+        del fake_project_env
+        from lib.map.slam import SlamMapper
+
+        abs_settings = tmp_path / "custom_abs_settings.yaml"
+        abs_settings.write_text("Camera.type: PinHole\nCamera.fx: 42.0\n", encoding="utf-8")
+
+        _, settings = SlamMapper._resolve_vocab_and_settings(
+            {"settings": str(abs_settings)}, "config/models/orbslam3_mono.yaml"
+        )
+
+        assert settings == abs_settings
+
+    def test_relative_non_config_settings_path_is_not_seeded(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, user_config_dir = fake_project_env
+        (project_root / "my_custom.yaml").write_text("Camera.type: PinHole\n", encoding="utf-8")
+
+        _, settings = SlamMapper._resolve_vocab_and_settings(
+            {"settings": "my_custom.yaml"}, "config/models/orbslam3_mono.yaml"
+        )
+
+        assert settings == project_root / "my_custom.yaml"
+        assert not (user_config_dir / "my_custom.yaml").exists()
+
+    def test_vocab_relative_resolves_against_project_root(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+
+        vocab, _ = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+
+        assert vocab == project_root / "assets" / "models" / "ORBvoc.txt"
+
+    def test_vocab_absolute_used_as_is(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        abs_vocab = project_root / "assets" / "models" / "ORBvoc.txt"
+
+        vocab, _ = SlamMapper._resolve_vocab_and_settings(
+            {"vocabulary": str(abs_vocab)}, "config/models/orbslam3_mono.yaml"
+        )
+
+        assert vocab == abs_vocab
+
+    def test_missing_vocab_raises(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        (project_root / "assets" / "models" / "ORBvoc.txt").unlink()
+
+        with pytest.raises(FileNotFoundError, match="ORB vocabulary not found"):
+            SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+
+
+# lib/map/slam.py — ORB-SLAM3 frame processing and trajectory extraction
+class TestOrbslam3Processing:
+    def test_process_frame_calls_process_image_mono_with_filename_arg(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mock_slam = MagicMock()
+        mock_slam.get_tracking_state.return_value = 2
+        mapper._slam = mock_slam
+
+        gray = np.zeros((480, 640), dtype=np.uint8)
+        state = mapper._process_frame_orbslam3(gray, 123.456)
+
+        # Unlike orbslam2's binding, orbslam3's process_image_mono takes a
+        # third (filename) argument.
+        mock_slam.process_image_mono.assert_called_once_with(gray, 123.456, "")
+        assert state == 2
+
+    def test_get_trajectory_inverts_tcw_to_twc(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mapper._backend = "orbslam3"
+
+        # A camera translated +1 in x, +2 in z (identity rotation), expressed
+        # as Twc (world position = translation column) — pyorbslam instead
+        # returns the inverse (Tcw, world-to-camera), so _get_trajectory must
+        # invert it back before pose[0, 3]/pose[2, 3] mean "world position"
+        # the same way they do for the orbslam2 backend.
+        twc_expected = np.eye(4)
+        twc_expected[0, 3] = 1.0
+        twc_expected[2, 3] = 2.0
+        tcw = np.linalg.inv(twc_expected)
+
+        mock_slam = MagicMock()
+        mock_slam.get_trajectory_points.return_value = [(0.0, tcw)]
+        mapper._slam = mock_slam
+
+        traj = mapper._get_trajectory()
+
+        assert len(traj) == 1
+        assert np.allclose(traj[0], twc_expected)
+
+    def test_get_trajectory_dispatches_by_backend(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mapper._get_trajectory_orbslam2 = MagicMock(return_value=["v2"])
+        mapper._get_trajectory_orbslam3 = MagicMock(return_value=["v3"])
+
+        mapper._backend = "orbslam2"
+        assert mapper._get_trajectory() == ["v2"]
+
+        mapper._backend = "orbslam3"
+        assert mapper._get_trajectory() == ["v3"]
+
+    def test_get_trajectory_orbslam3_returns_empty_list_on_error(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mock_slam = MagicMock()
+        mock_slam.get_trajectory_points.side_effect = RuntimeError("boom")
+        mapper._slam = mock_slam
+
+        assert mapper._get_trajectory_orbslam3() == []

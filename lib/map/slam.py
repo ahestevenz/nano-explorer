@@ -1,13 +1,17 @@
 """
 Minimal monocular SLAM for the JetBot.
 
-Backend: ORB-SLAM2 monocular mode.  Requires the Python bindings from
-github.com/muskie82/MonoSLAM.  Needs an ORB vocabulary file (ORBvoc.txt).
-Expect drift without an IMU; loop closure works in small rooms.
+Backend: ORB-SLAM2 or ORB-SLAM3 monocular mode, selected via config/models/slam.yaml.
+ORB-SLAM2 needs the Python bindings from github.com/ahestevenz/ORB_SLAM2-PythonBindings;
+ORB-SLAM3 needs github.com/ahestevenz/pyorbslam. Both need an ORB vocabulary file
+(ORBvoc.txt) — the same file works for either. Expect drift without an IMU; loop
+closure works in small rooms.
 
 YAML fields (config/models/slam.yaml):
-    backend:    "orbslam2"
+    backend:    "orbslam2" | "orbslam3"
     vocabulary: path to ORBvoc.txt
+    settings:   path to the backend's camera-calibration YAML
+                (config/models/orbslam2_mono.yaml or orbslam3_mono.yaml)
 
 All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
@@ -25,10 +29,24 @@ from pydantic import BaseModel, Field, validator
 from lib.camera_motion_mixin import CameraMotionMixIn
 from lib.settings import PROJECT_ROOT_PATH, ensure_user_config, user_config_path
 
-_VALID_BACKENDS = ["orbslam2"]
+_VALID_BACKENDS = ["orbslam2", "orbslam3"]
 
-# Tracking state labels used by ORB-SLAM2 (ORB_SLAM2::Tracking::eTrackingState)
-_ORBSLAM2_STATES = {-1: "NOT_READY", 0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK", 3: "LOST"}
+# Display names for log messages — self._backend is the raw config string.
+_BACKEND_LABELS = {"orbslam2": "ORB-SLAM2", "orbslam3": "ORB-SLAM3"}
+
+# Tracking state labels shared verbatim by both backends' eTrackingState enums
+# (identical values through OK) — kept separate below because the two diverge
+# at 3: ORB-SLAM2 has no RECENTLY_LOST grace period, so its 3 means LOST
+# outright, while ORB-SLAM3's 3 is RECENTLY_LOST and 4 is LOST. Merging past
+# OK would silently mislabel whichever backend didn't get to define state 3.
+_STATES_COMMON = {-1: "NOT_READY", 0: "NO_IMAGES", 1: "NOT_INIT", 2: "OK"}
+
+# ORB_SLAM2::Tracking::eTrackingState
+_ORBSLAM2_STATES = {**_STATES_COMMON, 3: "LOST"}
+
+# ORB_SLAM3::Tracking::eTrackingState — RECENTLY_LOST is a grace period before
+# LOST, and OK_KLT is a KLT-tracking fallback state ORB-SLAM2 doesn't have.
+_ORBSLAM3_STATES = {**_STATES_COMMON, 3: "RECENTLY_LOST", 4: "LOST", 5: "OK_KLT"}
 
 # How often (in frames) to log the extra frame-quality diagnostics below —
 # frequent enough to catch a stuck init within a couple seconds, cheap enough
@@ -77,7 +95,7 @@ class SlamConfig(BaseModel):
 
 class SlamMapper(CameraMotionMixIn):
     """
-    Run monocular SLAM using ORB-SLAM2 or RTAB-Map.
+    Run monocular SLAM using ORB-SLAM2 or ORB-SLAM3.
 
     Construct via SlamMapper(**config.dict()).
     """
@@ -109,17 +127,14 @@ class SlamMapper(CameraMotionMixIn):
         if self._backend not in _VALID_BACKENDS:
             raise ValueError(f"backend must be one of {_VALID_BACKENDS}")
 
-        self._load_orbslam2(cfg)
+        if self._backend == "orbslam3":
+            self._load_orbslam3(cfg)
+        else:
+            self._load_orbslam2(cfg)
 
-    def _load_orbslam2(self, cfg: dict) -> None:
-        try:
-            import orbslam2  # pylint: disable=import-error
-        except ImportError as e:
-            raise RuntimeError(
-                "orbslam2 Python bindings not found.\n"
-                "Build from: https://github.com/raulmur/ORB_SLAM2"
-            ) from e
-
+    @staticmethod
+    def _resolve_vocab_and_settings(cfg: dict, default_settings_rel: str) -> tuple:
+        """Vocab/settings path resolution shared by every backend's _load_* method."""
         vocab = Path(cfg.get("vocabulary", "assets/models/ORBvoc.txt"))
         if not vocab.is_absolute():
             vocab = PROJECT_ROOT_PATH / vocab
@@ -128,7 +143,7 @@ class SlamMapper(CameraMotionMixIn):
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        settings_rel = cfg.get("settings", "config/models/orbslam2_mono.yaml")
+        settings_rel = cfg.get("settings", default_settings_rel)
         settings = Path(settings_rel)
         if not settings.is_absolute():
             # This one's a config/*.yaml file (camera calibration), not an
@@ -142,6 +157,18 @@ class SlamMapper(CameraMotionMixIn):
                 if settings_rel.startswith("config/")
                 else PROJECT_ROOT_PATH / settings
             )
+        return vocab, settings
+
+    def _load_orbslam2(self, cfg: dict) -> None:
+        try:
+            import orbslam2  # pylint: disable=import-error
+        except ImportError as e:
+            raise RuntimeError(
+                "orbslam2 Python bindings not found.\n"
+                "Build from: https://github.com/raulmur/ORB_SLAM2"
+            ) from e
+
+        vocab, settings = self._resolve_vocab_and_settings(cfg, "config/models/orbslam2_mono.yaml")
         if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM2 settings not found: {settings}\n"
@@ -156,12 +183,42 @@ class SlamMapper(CameraMotionMixIn):
         self._slam.initialize()
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
+    def _load_orbslam3(self, cfg: dict) -> None:
+        try:
+            from pyorbslam import orbslam3  # pylint: disable=import-error
+        except ImportError as e:
+            raise RuntimeError(
+                "pyorbslam Python bindings not found.\n"
+                "Build from: https://github.com/ahestevenz/pyorbslam"
+            ) from e
+
+        vocab, settings = self._resolve_vocab_and_settings(cfg, "config/models/orbslam3_mono.yaml")
+        if not settings.exists():
+            raise FileNotFoundError(
+                f"ORB-SLAM3 settings not found: {settings}\n"
+                "Create camera calibration YAML at config/models/orbslam3_mono.yaml"
+            )
+        self._slam = orbslam3.System(str(vocab), str(settings), orbslam3.Sensor.MONOCULAR)
+        self._slam.set_use_viewer(False)
+        self._slam.initialize()
+        logger.success(f"ORB-SLAM3 initialised — vocab={vocab}  settings={settings}")
+
     def _process_frame_orbslam2(self, gray: np.ndarray, timestamp: float) -> int:
         # process_image_mono() returns a bool — whether *this frame* tracked
         # successfully — not the tracking-state enum. Casting that bool through
         # _ORBSLAM2_STATES only ever produced NO_IMAGES(0)/NOT_INIT(1); OK/LOST
         # could never appear. get_tracking_state() is the real state accessor.
         self._slam.process_image_mono(gray, timestamp)
+        return int(self._slam.get_tracking_state())
+
+    def _process_frame_orbslam3(self, gray: np.ndarray, timestamp: float) -> int:
+        # process_image_mono() returns the estimated pose as an ndarray (all
+        # zeros on failure) — not the tracking-state enum, same caveat as
+        # orbslam2's binding above. get_tracking_state() is the real accessor.
+        # GrabImageMonocular handles single-channel input directly (no internal
+        # cvtColor when the image is already gray), so passing gray here — same
+        # as the orbslam2 path — avoids a redundant color conversion.
+        self._slam.process_image_mono(gray, timestamp, "")
         return int(self._slam.get_tracking_state())
 
     def _frame_diagnostics(self, gray: np.ndarray) -> str:
@@ -233,6 +290,11 @@ class SlamMapper(CameraMotionMixIn):
         return mask
 
     def _get_trajectory(self) -> list:
+        if self._backend == "orbslam3":
+            return self._get_trajectory_orbslam3()
+        return self._get_trajectory_orbslam2()
+
+    def _get_trajectory_orbslam2(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
         # returns one 13-element tuple per processed frame:
         #   (timestamp, R00,R01,R02,t0, R10,R11,R12,t1, R20,R21,R22,t2)
@@ -246,6 +308,24 @@ class SlamMapper(CameraMotionMixIn):
                 pose = np.eye(4)
                 pose[:3, :4] = np.asarray(raw[1:], dtype=np.float64).reshape(3, 4)
                 poses.append(pose)
+            return poses
+        except Exception:  # pylint: disable=broad-except
+            return []
+
+    def _get_trajectory_orbslam3(self) -> list:
+        # pyorbslam's get_trajectory_points() (ORBSlamPython.cpp) returns one
+        # (timestamp, Tcw) tuple per processed frame, where Tcw is already a full
+        # 4x4 ndarray — but it's the WORLD-TO-CAMERA transform, not camera-to-world.
+        # ORB-SLAM3's own reference trajectory export (System::SaveTrajectoryTUM,
+        # System.cc) explicitly computes `Twc = Tcw.inverse()` before treating the
+        # translation as the camera's world position — this does the same, so
+        # pose[0, 3] / pose[2, 3] below mean the same thing they do for the
+        # orbslam2 backend above (_last_pose_xz, _render_map_view). Skipping this
+        # inversion would silently plot a mirrored/wrong trajectory.
+        try:
+            poses = []
+            for _timestamp, tcw in self._slam.get_trajectory_points():
+                poses.append(np.linalg.inv(np.asarray(tcw, dtype=np.float64)))
             return poses
         except Exception:  # pylint: disable=broad-except
             return []
@@ -295,8 +375,13 @@ class SlamMapper(CameraMotionMixIn):
                 self._frame_idx += 1
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                state = self._process_frame_orbslam2(gray, ts)
-                label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
+                if self._backend == "orbslam3":
+                    state = self._process_frame_orbslam3(gray, ts)
+                    label = _ORBSLAM3_STATES.get(state, "UNKNOWN")
+                else:
+                    state = self._process_frame_orbslam2(gray, ts)
+                    label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
+                backend_label = _BACKEND_LABELS[self._backend]
 
                 # get_trajectory_points() walks the whole map and copies it into Python —
                 # not free, and it grows as the map does. Only pay for it on frames where
@@ -307,7 +392,7 @@ class SlamMapper(CameraMotionMixIn):
 
                 if state_changed:
                     logger.info(
-                        f"ORB-SLAM2 state changed: {self._last_state_label} -> {label}  "
+                        f"{backend_label} state changed: {self._last_state_label} -> {label}  "
                         f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s)"
                     )
                     self._last_state_label = label
@@ -320,7 +405,8 @@ class SlamMapper(CameraMotionMixIn):
                 # until loguru confirms a DEBUG-level sink is actually active —
                 # so this costs nothing when only INFO/WARNING are enabled.
                 logger.opt(lazy=True).debug(
-                    "ORB-SLAM2 frame={}  dt={:.0f}ms  state={}{}{}",
+                    "{} frame={}  dt={:.0f}ms  state={}{}{}",
+                    lambda backend_label=backend_label: backend_label,
                     lambda: self._frame_idx,
                     lambda dt=dt: dt * 1000,
                     lambda label=label: label,
@@ -337,7 +423,7 @@ class SlamMapper(CameraMotionMixIn):
                 ):
                     self._stall_warned = True
                     logger.warning(
-                        f"ORB-SLAM2 still {label} after {_STALL_WARN_FRAMES} frames. "
+                        f"{backend_label} still {label} after {_STALL_WARN_FRAMES} frames. "
                         "Re-run with DEBUG logging enabled to see the per-frame diagnostics: "
                         "cv2_orb_kpts near 0 means the camera feed itself is unusable "
                         "(dark/blurry/low-texture); a healthy keypoint count with no init "
