@@ -538,7 +538,7 @@ sudo apt install -y libboost-numpy-dev
 (No PyQt5 apt package needed — see the fourth point below; this fork no
 longer requires it at all for what nano-explorer uses.)
 
-**Four things confirmed by actually running this on a real JetPack 4.6.1
+**Eight things confirmed by actually running this on a real JetPack 4.6.1
 device:**
 
 - **`py-build-cmake~=0.1.8` cannot install on Python 3.6 — already fixed in
@@ -597,6 +597,68 @@ device:**
   crashing) — so a plain `pip3 install .` no longer touches PyQt5 at all. No
   action needed; noted here so the old apt-based workaround (a `python3-pyqt5`
   system package) isn't confused for something still required.
+
+- **Unversioned `find_package(Boost ... COMPONENTS python ...)` linked the
+  wrong Boost.Python build — already fixed in this fork.** Ubuntu bionic
+  aarch64 ships both `libboost_python-py27.so` and `libboost_python3-py36.so`
+  side by side, and `libboost-python-dev`'s "default version" alternatives
+  symlink (`libboost_python.so -> libboost_python-py27.so`) is what the plain
+  `python` component name resolves to — even on a venv running Python 3.6.
+  Confirmed on-device via `ldd orbslam3.so | grep boost_python`: the built
+  extension linked *both* `libboost_python-py27.so.1.65.1` *and*
+  `libboost_python3-py36.so.1.65.1` (the latter pulled in transitively by the
+  `numpy3` component), and importing it under Python 3.6 failed with
+  `ImportError: .../libboost_python-py27.so.1.65.1: undefined symbol:
+  PyClass_Type` — a Python-2-only C API symbol the py27 lib expects the host
+  interpreter to provide, which a Python 3 process never does. This fork's
+  `src/python/CMakeLists.txt` now requests `python3` explicitly instead of
+  `python`. No action needed unless you're diffing against upstream.
+
+- **Unversioned `find_package(PythonLibs)` has the same "default version"
+  problem as Boost above — already fixed in this fork.** Even with
+  `find_package(PythonInterp 3)` on the line above it correctly resolving to
+  the venv's Python 3.6, the very next line's unqualified
+  `find_package(PythonLibs)` (no version arg) resolved to Python 2.7's
+  headers. Compiling `BOOST_PYTHON_MODULE` against Python 2.7's `Python.h`
+  (`PY_MAJOR_VERSION < 3`) emits the legacy `initorbslam3` entry point instead
+  of the `PyInit_orbslam3` Python 3's import machinery requires, so the
+  import fails with `ImportError: dynamic module does not define module
+  export function (PyInit_orbslam3)`. This fork now pins `find_package(
+  PythonLibs 3 REQUIRED)` to match. No action needed unless you're diffing
+  against upstream.
+
+- **`CXX_VISIBILITY_PRESET "hidden"` on the `orbslam3` target also hides its
+  own module entry point — already fixed in this fork.** That target property
+  (added, per its own comment, to keep the vendored `DBoW2`/`g2o`/`ORB_SLAM3`
+  symbols out of the `.so`'s dynamic symbol table) also hides Boost.Python
+  1.65's auto-generated `PyInit_orbslam3` function, since its
+  `BOOST_PYTHON_MODULE` macro never applies `BOOST_SYMBOL_EXPORT` to it.
+  Confirmed on-device: even after both Python-version fixes above, the same
+  `PyInit_orbslam3` `ImportError` persisted; `nm orbslam3.so` (all symbols)
+  showed `PyInit_orbslam3` present but local (`t`), while `nm -D orbslam3.so`
+  (the dynamic table Python's import machinery actually searches via
+  `dlsym`) showed nothing. This fork's `src/python/CMakeLists.txt` now
+  overrides visibility to default for just `src/ORBSlamPython.cpp` (where
+  the macro lives) via `set_source_files_properties(... COMPILE_OPTIONS
+  "-fvisibility=default")`, re-exporting the entry point while leaving every
+  other vendored symbol hidden. No action needed unless you're diffing
+  against upstream.
+
+- **The CMake build cache under `.py-build-cmake_cache/` persists across
+  `pip3 install .` runs and does not auto-invalidate when
+  `src/python/CMakeLists.txt` changes.** `find_package`'s underlying
+  `find_path`/`find_library` calls only search when the corresponding cache
+  variable (`PYTHON_LIBRARY`, `PYTHON_INCLUDE_DIR`, ...) isn't already set —
+  once a stale value is cached (e.g. from before the three fixes above),
+  adding a version constraint to `find_package` later does **not** invalidate
+  or re-search it, so `pip3 install . --force-reinstall` alone kept rebuilding
+  against the same wrong Python/Boost paths. If you ever edit this project's
+  CMake config yourself, remove the cache first:
+  ```bash
+  cd ~/code/pyorbslam
+  rm -rf build .py-build-cmake-cache .py-build-cmake_cache
+  pip3 install . --force-reinstall --no-deps
+  ```
 
 #### Clone
 
@@ -690,6 +752,12 @@ from pyorbslam import orbslam3
 print([m for m in dir(orbslam3.System) if 'last_init' in m])
 "
 ```
+
+Two `[WARNING] pyorbslam: ... unavailable` lines (`trajectory_drawer` needing
+`pyqtgraph`, `tools` needing `plyfile`) are expected and harmless — see the
+PyQt5 bullet above; nano-explorer only ever touches `from pyorbslam import
+orbslam3`. `pyorbslam OK` printing after them means the import itself
+succeeded.
 
 Expect the second command to print all three new methods:
 `['get_last_init_detections', 'get_last_init_inlier_matches', 'get_last_init_raw_matches']`.
