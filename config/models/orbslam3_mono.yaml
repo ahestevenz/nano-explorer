@@ -12,6 +12,10 @@
 # the C++ core in this path, but required by pyorbslam's own high-level
 # ASLAM/MonoSLAM wrapper, which reads them directly from this YAML).
 
+# Path to the ORB vocabulary file, relative to the project root (or absolute).
+# Download from: https://github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary
+Vocabulary: "assets/models/ORBvoc.txt"
+
 Camera.type: "PinHole"
 
 Camera.fx: 530.067336

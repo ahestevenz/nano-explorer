@@ -341,7 +341,8 @@ python3 -c "import orbslam2; print('orbslam2 OK')"
 
 ### Download the ORB vocabulary file
 
-Required at runtime — path is set via `vocabulary` in `config/models/slam.yaml`:
+Required at runtime — path is set via the `Vocabulary` key in
+`config/models/orbslam2_mono.yaml` (or `orbslam3_mono.yaml` for ORB-SLAM3):
 ```bash
 mkdir -p ~/code/nano-explorer/assets/models
 wget https://github.com/raulmur/ORB_SLAM2/raw/master/Vocabulary/ORBvoc.txt.tar.gz \

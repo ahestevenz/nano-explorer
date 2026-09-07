@@ -5,6 +5,10 @@
 # WARNING: these are approximate values. Run camera calibration (e.g. with
 # OpenCV's calibrateCamera) and replace fx, fy, cx, cy, k1, k2, p1, p2.
 
+# Path to the ORB vocabulary file, relative to the project root (or absolute).
+# Download from: https://github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary
+Vocabulary: "assets/models/ORBvoc.txt"
+
 Camera.fx: 530.067336
 Camera.fy: 707.509521
 Camera.cx: 305.709515

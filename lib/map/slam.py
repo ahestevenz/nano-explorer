@@ -9,9 +9,10 @@ closure works in small rooms.
 
 YAML fields (config/models/slam.yaml):
     backend:    "orbslam2" | "orbslam3"
-    vocabulary: path to ORBvoc.txt
-    settings:   path to the backend's camera-calibration YAML
-                (config/models/orbslam2_mono.yaml or orbslam3_mono.yaml)
+
+The backend's camera-calibration settings live in a fixed, non-configurable
+path (config/models/orbslam2_mono.yaml or orbslam3_mono.yaml). The ORB
+vocabulary path lives inside that same file, under the "Vocabulary" key.
 
 All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
@@ -128,14 +129,34 @@ class SlamMapper(CameraMotionMixIn):
             raise ValueError(f"backend must be one of {_VALID_BACKENDS}")
 
         if self._backend == "orbslam3":
-            self._load_orbslam3(cfg)
+            self._load_orbslam3()
         else:
-            self._load_orbslam2(cfg)
+            self._load_orbslam2()
 
     @staticmethod
-    def _resolve_vocab_and_settings(cfg: dict, default_settings_rel: str) -> tuple:
-        """Vocab/settings path resolution shared by every backend's _load_* method."""
-        vocab = Path(cfg.get("vocabulary", "assets/models/ORBvoc.txt"))
+    def _resolve_settings(default_settings_rel: str) -> Path:
+        """
+        Backend settings path — fixed per backend, not user-configurable in slam.yaml.
+        Routed through the same user-config seeding as every other config_path, so a
+        hand-tuned calibration survives a package upgrade.
+        """
+        return ensure_user_config(user_config_path(default_settings_rel[len("config/") :]))
+
+    @staticmethod
+    def _resolve_vocab(settings: Path) -> Path:
+        """
+        ORB vocabulary path — read from the "Vocabulary" key inside the backend's own
+        OpenCV FileStorage settings file, falling back to the default ORBvoc.txt
+        location if that key is absent.
+        """
+        vocab_rel = "assets/models/ORBvoc.txt"
+        fs = cv2.FileStorage(str(settings), cv2.FILE_STORAGE_READ)
+        node = fs.getNode("Vocabulary")
+        if not node.empty():
+            vocab_rel = node.string()
+        fs.release()
+
+        vocab = Path(vocab_rel)
         if not vocab.is_absolute():
             vocab = PROJECT_ROOT_PATH / vocab
         if not vocab.exists():
@@ -143,23 +164,9 @@ class SlamMapper(CameraMotionMixIn):
                 f"ORB vocabulary not found: {vocab}\n"
                 "Download ORBvoc.txt from github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary"
             )
-        settings_rel = cfg.get("settings", default_settings_rel)
-        settings = Path(settings_rel)
-        if not settings.is_absolute():
-            # This one's a config/*.yaml file (camera calibration), not an
-            # assets/ blob like vocab above — route it through the same
-            # user-config seeding as every other config_path, so a hand-tuned
-            # calibration survives a package upgrade. Anything relative but
-            # NOT rooted at "config/" (a custom path someone set explicitly)
-            # falls back to plain PROJECT_ROOT_PATH anchoring.
-            settings = (
-                ensure_user_config(user_config_path(settings_rel[len("config/") :]))
-                if settings_rel.startswith("config/")
-                else PROJECT_ROOT_PATH / settings
-            )
-        return vocab, settings
+        return vocab
 
-    def _load_orbslam2(self, cfg: dict) -> None:
+    def _load_orbslam2(self) -> None:
         try:
             import orbslam2  # pylint: disable=import-error
         except ImportError as e:
@@ -168,12 +175,13 @@ class SlamMapper(CameraMotionMixIn):
                 "Build from: https://github.com/raulmur/ORB_SLAM2"
             ) from e
 
-        vocab, settings = self._resolve_vocab_and_settings(cfg, "config/models/orbslam2_mono.yaml")
+        settings = self._resolve_settings("config/models/orbslam2_mono.yaml")
         if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM2 settings not found: {settings}\n"
                 "Create camera calibration YAML at config/models/orbslam2_mono.yaml"
             )
+        vocab = self._resolve_vocab(settings)
         self._slam = orbslam2.System(str(vocab), str(settings), orbslam2.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
         # System() only records the vocab/settings paths — initialize() is what actually
@@ -183,7 +191,7 @@ class SlamMapper(CameraMotionMixIn):
         self._slam.initialize()
         logger.success(f"ORB-SLAM2 initialised — vocab={vocab}  settings={settings}")
 
-    def _load_orbslam3(self, cfg: dict) -> None:
+    def _load_orbslam3(self) -> None:
         try:
             from pyorbslam import orbslam3  # pylint: disable=import-error
         except ImportError as e:
@@ -192,12 +200,13 @@ class SlamMapper(CameraMotionMixIn):
                 "Build from: https://github.com/ahestevenz/pyorbslam"
             ) from e
 
-        vocab, settings = self._resolve_vocab_and_settings(cfg, "config/models/orbslam3_mono.yaml")
+        settings = self._resolve_settings("config/models/orbslam3_mono.yaml")
         if not settings.exists():
             raise FileNotFoundError(
                 f"ORB-SLAM3 settings not found: {settings}\n"
                 "Create camera calibration YAML at config/models/orbslam3_mono.yaml"
             )
+        vocab = self._resolve_vocab(settings)
         self._slam = orbslam3.System(str(vocab), str(settings), orbslam3.Sensor.MONOCULAR)
         self._slam.set_use_viewer(False)
         self._slam.initialize()

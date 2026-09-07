@@ -48,7 +48,7 @@ def _dummy_frame(h=480, w=640) -> np.ndarray:
 def fake_project_env(tmp_path, monkeypatch):
     """
     Isolated fake PROJECT_ROOT_PATH + USER_CONFIG_DIR for testing
-    SlamMapper._resolve_vocab_and_settings without touching the real package
+    SlamMapper._resolve_settings / _resolve_vocab without touching the real package
     config/ or ~/.nano-explorer/config/. Returns (project_root, user_config_dir).
     """
     import lib.map.slam as slam_mod
@@ -59,7 +59,8 @@ def fake_project_env(tmp_path, monkeypatch):
     (project_root / "config" / "models").mkdir(parents=True)
     (project_root / "assets" / "models").mkdir(parents=True)
     (project_root / "config" / "models" / "orbslam3_mono.yaml").write_text(
-        "Camera.type: PinHole\nCamera.fx: 111.0\n", encoding="utf-8"
+        'Vocabulary: "assets/models/ORBvoc.txt"\nCamera.type: PinHole\nCamera.fx: 111.0\n',
+        encoding="utf-8",
     )
     (project_root / "assets" / "models" / "ORBvoc.txt").write_text("fake vocab", encoding="utf-8")
 
@@ -538,18 +539,18 @@ class TestLoadDispatch:
         # pyorbslam isn't installed in this test environment (unlike orbslam2,
         # which conftest.py mocks away) — this exercises the real ImportError path.
         with pytest.raises(RuntimeError, match="pyorbslam"):
-            mapper._load_orbslam3({})
+            mapper._load_orbslam3()
 
 
-# lib/map/slam.py — vocab/settings path resolution (relative vs. absolute,
-# and whether a config lands in ~/.nano-explorer/config vs. the package's own)
-class TestResolveVocabAndSettings:
+# lib/map/slam.py — settings path resolution (fixed per backend, seeded into
+# ~/.nano-explorer/config) and vocab resolution (read from the settings file itself)
+class TestResolveSettings:
     def test_relative_config_path_seeds_user_config_dir(self, fake_project_env):
         from lib.map.slam import SlamMapper
 
         project_root, user_config_dir = fake_project_env
 
-        _, settings = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
 
         assert settings == user_config_dir / "models" / "orbslam3_mono.yaml"
         assert settings.exists()
@@ -558,70 +559,56 @@ class TestResolveVocabAndSettings:
         ).read_text(encoding="utf-8")
 
     def test_user_edit_survives_a_second_resolve(self, fake_project_env):
-        # fake_project_env's monkeypatching is what makes _resolve_vocab_and_settings
+        # fake_project_env's monkeypatching is what makes _resolve_settings
         # resolve into tmp_path at all here — the fixture's return value isn't needed.
         del fake_project_env
         from lib.map.slam import SlamMapper
 
-        _, settings = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
         settings.write_text(
             "Camera.type: PinHole\nCamera.fx: 999.0  # user-tuned\n", encoding="utf-8"
         )
 
-        _, settings2 = SlamMapper._resolve_vocab_and_settings(
-            {}, "config/models/orbslam3_mono.yaml"
-        )
+        settings2 = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
 
         assert settings2 == settings
         assert "999.0" in settings2.read_text(encoding="utf-8")
 
-    def test_absolute_settings_path_used_as_is(self, fake_project_env, tmp_path):
-        # Same as above — fake_project_env is here only for its monkeypatching side effect.
-        del fake_project_env
-        from lib.map.slam import SlamMapper
 
-        abs_settings = tmp_path / "custom_abs_settings.yaml"
-        abs_settings.write_text("Camera.type: PinHole\nCamera.fx: 42.0\n", encoding="utf-8")
-
-        _, settings = SlamMapper._resolve_vocab_and_settings(
-            {"settings": str(abs_settings)}, "config/models/orbslam3_mono.yaml"
-        )
-
-        assert settings == abs_settings
-
-    def test_relative_non_config_settings_path_is_not_seeded(self, fake_project_env):
-        from lib.map.slam import SlamMapper
-
-        project_root, user_config_dir = fake_project_env
-        (project_root / "my_custom.yaml").write_text("Camera.type: PinHole\n", encoding="utf-8")
-
-        _, settings = SlamMapper._resolve_vocab_and_settings(
-            {"settings": "my_custom.yaml"}, "config/models/orbslam3_mono.yaml"
-        )
-
-        assert settings == project_root / "my_custom.yaml"
-        assert not (user_config_dir / "my_custom.yaml").exists()
-
+class TestResolveVocab:
     def test_vocab_relative_resolves_against_project_root(self, fake_project_env):
         from lib.map.slam import SlamMapper
 
         project_root, _ = fake_project_env
 
-        vocab, _ = SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+        vocab = SlamMapper._resolve_vocab(settings)
 
         assert vocab == project_root / "assets" / "models" / "ORBvoc.txt"
 
-    def test_vocab_absolute_used_as_is(self, fake_project_env):
+    def test_vocab_absolute_used_as_is(self, fake_project_env, tmp_path):
         from lib.map.slam import SlamMapper
 
         project_root, _ = fake_project_env
         abs_vocab = project_root / "assets" / "models" / "ORBvoc.txt"
 
-        vocab, _ = SlamMapper._resolve_vocab_and_settings(
-            {"vocabulary": str(abs_vocab)}, "config/models/orbslam3_mono.yaml"
-        )
+        settings = tmp_path / "custom_settings.yaml"
+        settings.write_text(f'Vocabulary: "{abs_vocab}"\n', encoding="utf-8")
+
+        vocab = SlamMapper._resolve_vocab(settings)
 
         assert vocab == abs_vocab
+
+    def test_missing_vocabulary_key_falls_back_to_default(self, fake_project_env, tmp_path):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        settings = tmp_path / "no_vocab_key.yaml"
+        settings.write_text("Camera.type: PinHole\n", encoding="utf-8")
+
+        vocab = SlamMapper._resolve_vocab(settings)
+
+        assert vocab == project_root / "assets" / "models" / "ORBvoc.txt"
 
     def test_missing_vocab_raises(self, fake_project_env):
         from lib.map.slam import SlamMapper
@@ -629,8 +616,9 @@ class TestResolveVocabAndSettings:
         project_root, _ = fake_project_env
         (project_root / "assets" / "models" / "ORBvoc.txt").unlink()
 
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
         with pytest.raises(FileNotFoundError, match="ORB vocabulary not found"):
-            SlamMapper._resolve_vocab_and_settings({}, "config/models/orbslam3_mono.yaml")
+            SlamMapper._resolve_vocab(settings)
 
 
 # lib/map/slam.py — ORB-SLAM3 frame processing and trajectory extraction
