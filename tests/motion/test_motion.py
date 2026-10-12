@@ -378,3 +378,35 @@ class TestCollisionModelPath:
 
             mock_download.assert_called_once()
             assert config.model_path == fake_default
+
+
+# lib/motor.py — trim-to-motor mapping
+class TestMotorTrimMapping:
+    """
+    InvertedRobot drives the chassis in jetbot's "backward" direction, so
+    jetbot's left_motor is the robot's physical right wheel. Trim names the
+    physical wheels, so it must land on the opposite jetbot motor.
+    """
+
+    def _controller(self, robot_cls):
+        import lib.motor as motor_mod
+
+        with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
+            motor_mod, "InvertedRobot", robot_cls, create=True
+        ):
+            controller = motor_mod.MotorController(left_trim=0.8, right_trim=1.0)
+            controller.open()
+        return controller
+
+    def test_open_swaps_trim_onto_jetbot_motors(self):
+        robot_cls = MagicMock()
+        self._controller(robot_cls)
+        robot_cls.assert_called_once_with(left_motor_alpha=1.0, right_motor_alpha=0.8)
+
+    def test_set_trim_swaps_trim_onto_jetbot_motors(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.set_trim(0.9, 0.7)
+        robot = robot_cls.return_value
+        assert robot.left_motor.alpha == pytest.approx(0.7)
+        assert robot.right_motor.alpha == pytest.approx(0.9)

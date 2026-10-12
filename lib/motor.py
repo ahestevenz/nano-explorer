@@ -100,12 +100,18 @@ class MotorController:
     In DRY-RUN mode (jetbot not installed) every call is logged but
     no hardware is touched.
 
+    Left/right here always mean the robot's physical wheels as seen driving
+    camera-forward. Because InvertedRobot drives the chassis in jetbot's
+    "backward" direction, that's swapped relative to jetbot's own motor names:
+    jetbot's left_motor is our right wheel and vice versa (confirmed on-device:
+    left_trim=0.7 applied to left_motor_alpha made the robot curve right).
+
     Args:
-        left_trim:  Per-wheel power trim [0.0, 1.0], applied via jetbot's
-                    left_motor_alpha. Defaults to the value in
+        left_trim:  Per-wheel power trim [0.0, 1.0] for the physical left
+                    wheel (jetbot's right_motor). Defaults to the value in
                     config/motors/trim.yaml (1.0 = no correction) if not
                     given. See tools/calibrate_motors.py.
-        right_trim: Same, for the right wheel.
+        right_trim: Same, for the physical right wheel (jetbot's left_motor).
     """
 
     def __init__(self, left_trim: float = None, right_trim: float = None):
@@ -120,8 +126,9 @@ class MotorController:
         if self._dry_run:
             logger.warning("DRY-RUN: MotorController.open() skipped.")
             return
+        # Swapped on purpose — see the class docstring.
         self._robot = InvertedRobot(
-            left_motor_alpha=self._left_trim, right_motor_alpha=self._right_trim
+            left_motor_alpha=self._right_trim, right_motor_alpha=self._left_trim
         )
         logger.success(
             f"MotorController ready (jetbot.Robot)  "
@@ -136,8 +143,9 @@ class MotorController:
             logger.debug(f"DRY-RUN set_trim: left={left_trim:.3f}  right={right_trim:.3f}")
             return
         if self._robot is not None:
-            self._robot.left_motor.alpha = left_trim
-            self._robot.right_motor.alpha = right_trim
+            # Swapped on purpose — see the class docstring.
+            self._robot.left_motor.alpha = right_trim
+            self._robot.right_motor.alpha = left_trim
 
     def close(self) -> None:
         """Stop motors and release the Robot instance."""
