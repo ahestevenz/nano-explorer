@@ -89,9 +89,9 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     p_slam.add_argument(
         "--speed",
         type=float,
-        default=0.15,
+        default=0.2,
         metavar="SPEED",
-        help="Motor speed 0.0-1.0 (default: 0.15)",
+        help="Motor speed 0.0-1.0 (default: 0.2)",
     )
     p_slam.add_argument(
         "--turn-gain",

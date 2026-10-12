@@ -29,7 +29,7 @@ Usage:
 """
 
 import threading
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -158,11 +158,7 @@ class CameraMotionMixIn:
         return t
 
     def _start_teleop_thread(
-        self,
-        stop_event: threading.Event,
-        speed: float = 0.3,
-        turn_gain: float = 0.5,
-        key_timeout: Optional[float] = None,
+        self, stop_event: threading.Event, speed: float = 0.3, turn_gain: float = 0.5
     ) -> threading.Thread:
         """
         Start arrow-key teleoperation in a background daemon thread.
@@ -174,18 +170,13 @@ class CameraMotionMixIn:
             speed:      Linear speed [0.0, 1.0].
             turn_gain:  Differential turn gain [0.0, 1.0].
             stop_event: threading.Event — set on quit; poll in the caller's loop.
-            key_timeout: Seconds without a keypress before the motors stop.
-                        None keeps TeleopConfig's default.
 
         Returns:
             The started daemon thread.
         """
         from lib.motion.teleoperation import TeleopController
 
-        kwargs = {"speed": speed, "turn_gain": turn_gain}
-        if key_timeout is not None:
-            kwargs["key_timeout"] = key_timeout
-        controller = TeleopController(**kwargs)
+        controller = TeleopController(speed=speed, turn_gain=turn_gain)
         t = threading.Thread(
             target=controller._run_arrows,
             kwargs={"stop_event": stop_event},

@@ -63,12 +63,6 @@ _STALL_WARN_FRAMES = 150
 _VIZ_MAX_FEATURES = 500
 _VIZ_MATCH_RATIO = 0.75
 
-# Teleop key-release timeout for SLAM driving. Terminal auto-repeat waits
-# ~250-500ms before repeating (and arrives in bursts over SSH), so teleop's
-# default 0.15s stops the motors between repeats — a held key becomes
-# stop-go-stop lurches, and each jolt blurs the frame and breaks tracking.
-_SLAM_KEY_TIMEOUT = 0.45
-
 
 class SlamConfig(BaseModel):
     """
@@ -90,7 +84,7 @@ class SlamConfig(BaseModel):
     stream_port: int = Field(8080, gt=1024, lt=65535)
     # Slower than the other commands' 0.3: at the Nano's ~6 fps SLAM rate, 0.3
     # moves the camera too far between frames to match features reliably.
-    speed: float = Field(0.15, ge=0.0, le=1.0)
+    speed: float = Field(0.2, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
     visualize: bool = False
 
@@ -376,7 +370,6 @@ class SlamMapper(CameraMotionMixIn):
             stop_event=_stop,
             speed=self._config.speed,
             turn_gain=self._config.turn_gain,
-            key_timeout=_SLAM_KEY_TIMEOUT,
         )
         logger.info(f"SLAM running — backend={self._backend}  " "(arrow keys to drive, q to stop)")
         if self._config.visualize and not self._config.stream:

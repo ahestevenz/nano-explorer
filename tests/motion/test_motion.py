@@ -248,43 +248,6 @@ class TestRunTeleop:
         mock_controller_cls.return_value.run.assert_called_once()
 
 
-class TestTeleopKeyTimeout:
-    def test_config_default_matches_module_constant(self):
-        from lib.motion.teleoperation import _KEY_TIMEOUT, TeleopConfig
-
-        assert TeleopConfig().key_timeout == pytest.approx(_KEY_TIMEOUT)
-
-    def test_config_rejects_non_positive(self):
-        from pydantic import ValidationError
-
-        from lib.motion.teleoperation import TeleopConfig
-
-        with pytest.raises(ValidationError):
-            TeleopConfig(key_timeout=0.0)
-
-    @patch("lib.motion.teleoperation.TeleopController")
-    @patch("threading.Thread")
-    def test_teleop_thread_passes_key_timeout(self, _mock_thread, mock_controller_cls):
-        import threading
-
-        from lib.camera_motion_mixin import CameraMotionMixIn
-
-        CameraMotionMixIn._start_teleop_thread(
-            MagicMock(), threading.Event(), speed=0.15, turn_gain=0.5, key_timeout=0.45
-        )
-        mock_controller_cls.assert_called_once_with(speed=0.15, turn_gain=0.5, key_timeout=0.45)
-
-    @patch("lib.motion.teleoperation.TeleopController")
-    @patch("threading.Thread")
-    def test_teleop_thread_omits_key_timeout_by_default(self, _mock_thread, mock_controller_cls):
-        import threading
-
-        from lib.camera_motion_mixin import CameraMotionMixIn
-
-        CameraMotionMixIn._start_teleop_thread(MagicMock(), threading.Event())
-        mock_controller_cls.assert_called_once_with(speed=0.3, turn_gain=0.5)
-
-
 class TestRunStream:
     @patch("lib.motion.stream.CameraStreamer")
     @patch("lib.motion.stream.CameraStreamerConfig")

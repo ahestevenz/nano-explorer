@@ -141,7 +141,7 @@ class TestSlamDefaults:
 
     def test_default_speed_is_slower_than_other_commands(self):
         ns = _parse(["slam"])
-        assert ns.speed == pytest.approx(0.15)
+        assert ns.speed == pytest.approx(0.2)
 
     def test_custom_speed(self):
         ns = _parse(["slam", "--speed", "0.3"])
@@ -327,7 +327,7 @@ class TestSlamConfig:
         from lib.map.slam import SlamConfig
 
         cfg = SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
-        assert cfg.speed == pytest.approx(0.15)
+        assert cfg.speed == pytest.approx(0.2)
 
     def test_missing_config_raises(self, tmp_path):
         from pydantic import ValidationError
