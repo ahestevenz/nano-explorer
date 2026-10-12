@@ -141,6 +141,9 @@ disable = [
     "C0415",  # import-outside-toplevel (conditional imports for Jetson hardware)
     "E0611",  # no-name-in-module
     "R0801",  # duplicate-code — mixin subclasses share intentional run() boilerplate
+    "R0401",  # cyclic-import — camera_motion_mixin imports teleoperation lazily inside
+              # _start_teleop_thread (TeleopController subclasses the mixin), which is
+              # safe at runtime; R0401 can't be disabled inline, only here
 ]
 
 [tool.pylint.format]

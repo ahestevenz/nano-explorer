@@ -143,6 +143,8 @@ class TeleopConfig(BaseModel):
         mode:      "arrows" | "pynput" | "stdin" | "auto"
         stream:      Start a background MJPEG camera stream while driving
         stream_port: Port for the MJPEG server (default 8080)
+        key_timeout: Seconds without an arrow keypress before the motors stop
+                     (arrows mode only)
 
     """
 
@@ -151,6 +153,7 @@ class TeleopConfig(BaseModel):
     mode: str = "arrows"
     stream: bool = False
     stream_port: int = Field(8080, gt=1024, lt=65535)
+    key_timeout: float = Field(_KEY_TIMEOUT, gt=0.0)
 
     @validator("mode")
     def mode_must_be_valid(cls, v: str) -> str:  # pylint: disable=no-self-argument
@@ -247,7 +250,7 @@ class TeleopController(CameraMotionMixIn):
     def _run_arrows(self, stop_event: Optional[threading.Event] = None) -> None:
         """
         Read raw terminal bytes.  Arrow keys produce 3-byte escape sequences.
-        A background timer stops the robot if no key arrives within _KEY_TIMEOUT.
+        A background timer stops the robot if no key arrives within key_timeout.
 
         Args:
             stop_event: Optional shared threading.Event. When provided (vision+teleop
@@ -276,7 +279,7 @@ class TeleopController(CameraMotionMixIn):
             nonlocal stop_timer
             if stop_timer is not None:
                 stop_timer.cancel()
-            stop_timer = threading.Timer(_KEY_TIMEOUT, self._motors.stop)
+            stop_timer = threading.Timer(self._config.key_timeout, self._motors.stop)
             stop_timer.daemon = True
             stop_timer.start()
 
