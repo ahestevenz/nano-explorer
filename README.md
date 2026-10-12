@@ -252,7 +252,7 @@ nano-explorer map odometry --no-stream
 # Stream shows a live top-down trajectory map with camera picture-in-picture
 nano-explorer map slam
 nano-explorer map slam --config YAML                   # config (default: ~/.nano-explorer/config/models/slam.yaml)
-nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.15)
 nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
