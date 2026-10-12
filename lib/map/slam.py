@@ -251,6 +251,30 @@ class SlamMapper(CameraMotionMixIn):
             f"  cv2_orb_kpts={len(keypoints)}"
         )
 
+    def _init_diagnostics(self) -> str:
+        """
+        ORB-SLAM3 monocular-init counters from the instrumented pyorbslam fork
+        (Tracking::MonocularInitialization), for telling apart which gate a stuck
+        NOT_INIT is failing:
+          init_kpts  <= 100  -> not enough features to even set a reference frame
+          init_raw   <  100  -> reference frame doesn't match the current one
+                                (blur, too much motion between frames, low texture)
+          init_inl   low/-1  -> matches found, but two-view reconstruction rejects
+                                them (too little translation / parallax)
+        -1 means "not computed on the last call" (e.g. a new reference frame was
+        just set). '' for ORB-SLAM2 or a binding without these accessors.
+        """
+        if self._backend != "orbslam3" or not hasattr(self._slam, "get_last_init_detections"):
+            return ""
+        try:
+            return (
+                f"  init_kpts={self._slam.get_last_init_detections()}"
+                f"  init_raw={self._slam.get_last_init_raw_matches()}"
+                f"  init_inl={self._slam.get_last_init_inlier_matches()}"
+            )
+        except Exception:  # pylint: disable=broad-except
+            return ""
+
     def _update_visualization(self, frame: np.ndarray, gray: np.ndarray) -> tuple:
         """
         Detect ORB keypoints in the current frame, ratio-test match them against
@@ -416,12 +440,13 @@ class SlamMapper(CameraMotionMixIn):
                 # until loguru confirms a DEBUG-level sink is actually active —
                 # so this costs nothing when only INFO/WARNING are enabled.
                 logger.opt(lazy=True).debug(
-                    "{} frame={}  dt={:.0f}ms  state={}{}{}",
+                    "{} frame={}  dt={:.0f}ms  state={}{}{}{}",
                     lambda backend_label=backend_label: backend_label,
                     lambda: self._frame_idx,
                     lambda dt=dt: dt * 1000,
                     lambda label=label: label,
                     lambda traj_info=traj_info: traj_info,
+                    lambda label=label: self._init_diagnostics() if label == "NOT_INIT" else "",
                     lambda gray=gray, need_diag=need_diag: (
                         self._frame_diagnostics(gray) if need_diag else ""
                     ),

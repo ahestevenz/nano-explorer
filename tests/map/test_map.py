@@ -708,3 +708,28 @@ class TestOrbslam3Processing:
         mapper._slam = mock_slam
 
         assert mapper._get_trajectory_orbslam3() == []
+
+
+class TestInitDiagnostics:
+    def _mapper(self, backend, slam):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
+        mapper._backend = backend
+        mapper._slam = slam
+        return mapper
+
+    def test_orbslam3_reports_init_counters(self):
+        slam = MagicMock()
+        slam.get_last_init_detections.return_value = 812
+        slam.get_last_init_raw_matches.return_value = 64
+        slam.get_last_init_inlier_matches.return_value = -1
+        out = self._mapper("orbslam3", slam)._init_diagnostics()
+        assert out == "  init_kpts=812  init_raw=64  init_inl=-1"
+
+    def test_orbslam2_reports_nothing(self):
+        assert self._mapper("orbslam2", MagicMock())._init_diagnostics() == ""
+
+    def test_binding_without_accessors_reports_nothing(self):
+        slam = MagicMock(spec=["process_image_mono", "get_tracking_state"])
+        assert self._mapper("orbslam3", slam)._init_diagnostics() == ""
