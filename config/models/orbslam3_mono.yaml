@@ -36,7 +36,10 @@ Camera.fps: 30.0
 Camera.RGB: 0
 
 # ORB feature extractor
-ORBextractor.nFeatures: 2000
+# 1000 is ORB-SLAM's own default for 640x480. Monocular init uses a separate
+# extractor with 5x this many features (Tracking.cc), so 2000 meant 10000
+# features/frame until init — ~3 fps on the Nano's CPU.
+ORBextractor.nFeatures: 1000
 ORBextractor.scaleFactor: 1.2
 ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20
