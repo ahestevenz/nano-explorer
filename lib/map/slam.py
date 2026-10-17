@@ -18,10 +18,12 @@ All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
 
 import bisect
+import collections
 import contextlib
 import threading
+import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -29,6 +31,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
+from lib.map import slam_view
 from lib.settings import PROJECT_ROOT_PATH, ensure_user_config, user_config_path
 
 _VALID_BACKENDS = ["orbslam2", "orbslam3"]
@@ -58,12 +61,6 @@ _DIAG_INTERVAL = 30
 # warning pointing at the diagnostics instead of silently looping forever.
 _STALL_WARN_FRAMES = 150
 
-# --visualize overlay: independent of ORB-SLAM2's own extractor (which exposes
-# no accessor for its features/matches — see _frame_diagnostics above), so this
-# runs a second, throwaway ORB detect+match pass purely for display.
-_VIZ_MAX_FEATURES = 500
-_VIZ_MATCH_RATIO = 0.75
-
 # States in which the backend is still working inside a map (tracking it, or
 # trying to relocalize in it), and states that mean the map was abandoned and a
 # new one has to be initialized. A move from the first set to the second is a
@@ -80,8 +77,15 @@ _RELOCALIZING_LABEL = {"orbslam2": "LOST", "orbslam3": "RECENTLY_LOST"}
 # camera off the mapped view happened just before tracking reported it.
 _RECOVERY_LOOKBACK_S = 1.0
 
-# Map view: heading arrow length in pixels.
-_HEADING_ARROW_PX = 30
+# ORB-SLAM3 monocular's built-in RECENTLY_LOST window. The nano-explorer pyorbslam
+# fork makes it configurable ("System.RecentlyLostSeconds" in orbslam3_mono.yaml)
+# and reports the value it uses; older builds always use this.
+_DEFAULT_RECENTLY_LOST_S = 3.0
+# Auto-recovery replays at most (window - margin) seconds, so it finishes with
+# time left to relocalize, and never more than the cap: undoing much more than
+# that rarely gets back to the mapped view.
+_RECOVERY_MARGIN_S = 1.0
+_RECOVERY_REPLAY_CAP_S = 8.0
 
 
 class SlamConfig(BaseModel):
@@ -100,6 +104,8 @@ class SlamConfig(BaseModel):
         auto_recover: When tracking is lost, reverse the operator's last moves
                        (after they release the keys) to get back to the mapped
                        view before the backend gives up on the map.
+        max_exposure_ms: Cap the CSI camera's auto-exposure time (ms) to reduce
+                       motion blur; None keeps the camera's default range.
     """
 
     config_path: Path = user_config_path("models/slam.yaml")
@@ -111,6 +117,7 @@ class SlamConfig(BaseModel):
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
     visualize: bool = False
     auto_recover: bool = True
+    max_exposure_ms: Optional[float] = Field(None, gt=0)
 
     @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
@@ -138,15 +145,13 @@ class SlamMapper(CameraMotionMixIn):
         self._last_state_label = None
         self._diag_orb = None
         self._stall_warned = False
-        self._viz_detector = None
-        self._viz_matcher = None
-        self._viz_prev_frame = None
-        self._viz_prev_kps = None
-        self._viz_prev_desc = None
+        self._viz = slam_view.MatchVisualizer()
         # Timestamps at which the backend abandoned a map and had to start a new
         # one (see _IN_MAP_LABELS / _RESTART_LABELS). Poses tracked after the
         # latest entry belong to the current map.
         self._map_starts: List[float] = []
+        self._last_map_count: Optional[int] = None
+        self._recently_lost_s = _DEFAULT_RECENTLY_LOST_S
 
     def _load(self) -> None:
         import yaml
@@ -241,6 +246,41 @@ class SlamMapper(CameraMotionMixIn):
         self._slam.set_use_viewer(False)
         self._slam.initialize()
         logger.success(f"ORB-SLAM3 initialised — vocab={vocab}  settings={settings}")
+        self._recently_lost_s = self._resolve_recently_lost(settings)
+
+    def _resolve_recently_lost(self, settings: Path) -> float:
+        """
+        The RECENTLY_LOST window ORB-SLAM3 actually uses. The fork reports it;
+        an older build always uses 3 s, so a longer value in the settings file
+        would be silently ignored — say so instead.
+        """
+        if hasattr(self._slam, "get_recently_lost_seconds"):
+            try:
+                effective = float(self._slam.get_recently_lost_seconds())
+            except Exception:  # pylint: disable=broad-except
+                effective = -1.0
+            if effective > 0:
+                logger.info(f"ORB-SLAM3 relocalization window: {effective:.1f} s")
+                return effective
+
+        fs = cv2.FileStorage(str(settings), cv2.FILE_STORAGE_READ)
+        node = fs.getNode("System.RecentlyLostSeconds")
+        requested = None if node.empty() else node.real()
+        fs.release()
+        if requested is not None and abs(requested - _DEFAULT_RECENTLY_LOST_S) > 1e-6:
+            logger.warning(
+                f"System.RecentlyLostSeconds={requested:g} in {settings} is ignored by this "
+                f"pyorbslam build, which always uses {_DEFAULT_RECENTLY_LOST_S:g} s. Rebuild "
+                "pyorbslam from the nano-explorer fork to use it."
+            )
+        return _DEFAULT_RECENTLY_LOST_S
+
+    def _recovery_replay_s(self) -> float:
+        """Longest auto-recovery replay that still leaves time to relocalize."""
+        return min(
+            max(self._recently_lost_s - _RECOVERY_MARGIN_S, 1.0),
+            _RECOVERY_REPLAY_CAP_S,
+        )
 
     def _process_frame_orbslam2(self, gray: np.ndarray, timestamp: float) -> int:
         # process_image_mono() returns a bool — whether *this frame* tracked
@@ -303,54 +343,17 @@ class SlamMapper(CameraMotionMixIn):
         except Exception:  # pylint: disable=broad-except
             return ""
 
+    # Rendering lives in lib/map/slam_view.py. These aliases keep the names that
+    # _annotate_frame, run() and the tests use.
+    _ransac_inlier_mask = staticmethod(slam_view.ransac_inlier_mask)
+    _render_map_view = staticmethod(slam_view.render_map_view)
+    _render_features_panel = staticmethod(slam_view.render_features_panel)
+    _render_matches_panel = staticmethod(slam_view.render_matches_panel)
+    _render_visualization_view = staticmethod(slam_view.render_visualization_view)
+
     def _update_visualization(self, frame: np.ndarray, gray: np.ndarray) -> tuple:
-        """
-        Detect ORB keypoints in the current frame, ratio-test match them against
-        the previous frame, then RANSAC-filter those matches via the fundamental
-        matrix. Returns (keypoints, matches, inlier_mask, prev_frame, prev_kps) —
-        prev_frame/prev_kps/inlier_mask are None on the first call (or whenever
-        there aren't enough matches to fit a fundamental matrix).
-
-        Independent of ORB-SLAM2's own extractor (see _frame_diagnostics) —
-        only feeds the --visualize overlay, never the tracker itself.
-        """
-        if self._viz_detector is None:
-            self._viz_detector = cv2.ORB_create(nfeatures=_VIZ_MAX_FEATURES)
-            self._viz_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-
-        keypoints, desc = self._viz_detector.detectAndCompute(gray, None)
-        matches = []
-        inlier_mask = None
-        if self._viz_prev_desc is not None and desc is not None:
-            raw = self._viz_matcher.knnMatch(self._viz_prev_desc, desc, k=2)
-            for pair in raw:
-                if len(pair) == 2:
-                    m, n = pair
-                    if m.distance < _VIZ_MATCH_RATIO * n.distance:
-                        matches.append(m)
-            inlier_mask = self._ransac_inlier_mask(self._viz_prev_kps, keypoints, matches)
-
-        prev_frame, prev_kps = self._viz_prev_frame, self._viz_prev_kps
-        self._viz_prev_frame, self._viz_prev_kps, self._viz_prev_desc = (
-            frame.copy(),
-            keypoints,
-            desc,
-        )
-        return keypoints, matches, inlier_mask, prev_frame, prev_kps
-
-    @staticmethod
-    def _ransac_inlier_mask(prev_kps: list, keypoints: list, matches: list) -> Optional[np.ndarray]:
-        """
-        RANSAC-filter ratio-tested matches by fitting a fundamental matrix.
-        None if there are too few matches (<8) to fit one — cv2.findFundamentalMat's
-        minimum for the RANSAC method.
-        """
-        if len(matches) < 8:
-            return None
-        pts1 = np.float32([prev_kps[m.queryIdx].pt for m in matches])
-        pts2 = np.float32([keypoints[m.trainIdx].pt for m in matches])
-        _, mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC, 1.0, 0.99)
-        return mask
+        """--visualize overlay data; see slam_view.MatchVisualizer.update."""
+        return self._viz.update(frame, gray)
 
     def _get_trajectory(self) -> list:
         if self._backend == "orbslam3":
@@ -378,25 +381,78 @@ class SlamMapper(CameraMotionMixIn):
         except Exception:  # pylint: disable=broad-except
             return []
 
-    def _current_map_poses(self, stamped: List[Tuple[float, np.ndarray]]) -> list:
+    def _get_map_trajectory(self) -> List[Tuple[float, np.ndarray, int]]:
         """
-        Poses of the current map only. Each map has its own origin, heading and
-        scale, so poses from earlier maps can't be drawn in the same axes —
-        doing that made every map look like a straight line from (0, 0).
-        """
-        if not self._map_starts:
-            return [pose for _, pose in stamped]
-        start = self._map_starts[-1]
-        times = [t for t, _ in stamped]
-        return [pose for _, pose in stamped[bisect.bisect_right(times, start) :]]
+        (timestamp, camera-to-world pose, map key) per tracked frame.
 
-    def _map_label(self) -> str:
-        """Current map number for the stream overlay and logs."""
-        n = len(self._map_starts)
+        With the nano-explorer pyorbslam fork, the map key is ORB-SLAM3's own map
+        id for each pose, so poses of a map that got merged into the current one
+        report the current map's id and are drawn with it again. Older builds
+        don't report map ids; then each pose is assigned to the map that was
+        active when it was tracked, using the restart times in self._map_starts.
+        """
+        if self._backend == "orbslam3" and hasattr(self._slam, "get_trajectory_points_with_map"):
+            try:
+                return [
+                    (float(t), np.linalg.inv(np.asarray(tcw, dtype=np.float64)), int(map_id))
+                    for t, tcw, map_id in self._slam.get_trajectory_points_with_map()
+                ]
+            except Exception:  # pylint: disable=broad-except
+                return []
+        return [
+            (t, pose, bisect.bisect_right(self._map_starts, t))
+            for t, pose in self._get_stamped_trajectory()
+        ]
+
+    def _current_map_key(self) -> int:
+        """Key of the map the backend is working in now (see _get_map_trajectory)."""
+        if hasattr(self._slam, "get_current_map_id"):
+            try:
+                map_id = int(self._slam.get_current_map_id())
+                if map_id >= 0:
+                    return map_id
+            except Exception:  # pylint: disable=broad-except
+                pass
+        return len(self._map_starts)
+
+    def _split_maps(
+        self, traj: List[Tuple[float, np.ndarray, int]]
+    ) -> Tuple[list, List[Tuple[int, list]]]:
+        """
+        (current map's poses, [(key, poses) of each earlier map, oldest first]).
+
+        Each map has its own origin, heading and scale, so only the current map
+        is drawn in the main view — overlaying them made every map look like a
+        straight line from (0, 0). Earlier maps are drawn as thumbnails instead.
+        """
+        groups: Dict[int, list] = collections.OrderedDict()
+        for _t, pose, key in traj:
+            groups.setdefault(key, []).append(pose)
+        current = groups.pop(self._current_map_key(), [])
+        return current, list(groups.items())
+
+    def _map_number(self) -> int:
+        return self._current_map_key() + 1
+
+    def _map_label(self, n_earlier: Optional[int] = None) -> str:
+        """Current map number for the stream overlay."""
+        n = len(self._map_starts) if n_earlier is None else n_earlier
         if n == 0:
-            return "map #1"
-        hidden = "1 earlier map" if n == 1 else f"{n} earlier maps"
-        return f"map #{n + 1} · {hidden} not shown"
+            return f"map #{self._map_number()}"
+        earlier = "1 earlier map" if n == 1 else f"{n} earlier maps"
+        return f"map #{self._map_number()} · {earlier} in thumbnails"
+
+    def _check_map_merge(self) -> None:
+        """Log when the backend merges maps (the atlas shrinks)."""
+        count = self._backend_map_count()
+        if count is None:
+            return
+        if self._last_map_count is not None and count < self._last_map_count:
+            logger.success(
+                f"{_BACKEND_LABELS[self._backend]} merged an earlier map into the current one "
+                f"after recognising a mapped place ({count} map(s) left)"
+            )
+        self._last_map_count = count
 
     def _backend_map_count(self) -> Optional[int]:
         try:
@@ -416,7 +472,7 @@ class SlamMapper(CameraMotionMixIn):
             count = self._backend_map_count()
             atlas = f"  (backend holds {count} map(s))" if count is not None else ""
             logger.warning(
-                f"{backend_label} abandoned the map — starting map #{len(self._map_starts) + 1}. "
+                f"{backend_label} abandoned the map — starting map #{self._map_number()}. "
                 f"Its coordinates restart at (0, 0) facing forward; the old map is not "
                 f"connected to it unless the robot revisits a mapped place.{atlas}"
             )
@@ -426,7 +482,9 @@ class SlamMapper(CameraMotionMixIn):
         if teleop is None or not self._config.auto_recover:
             return
         if label == relocalizing and prev not in (relocalizing, None):
-            teleop.request_recovery(since=ts - _RECOVERY_LOOKBACK_S)
+            teleop.request_recovery(
+                since=ts - _RECOVERY_LOOKBACK_S, max_total=self._recovery_replay_s()
+            )
             logger.warning(
                 f"{backend_label} lost tracking — release the keys and auto-recovery will "
                 "reverse your last moves to find the mapped view again (any arrow key takes "
@@ -435,7 +493,7 @@ class SlamMapper(CameraMotionMixIn):
         elif prev == relocalizing and label != relocalizing:
             teleop.cancel_recovery()
             if label in ("OK", "OK_KLT"):
-                logger.success(f"{backend_label} relocalized in map #{len(self._map_starts) + 1}")
+                logger.success(f"{backend_label} relocalized in map #{self._map_number()}")
 
     def _get_trajectory_orbslam2(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
@@ -488,12 +546,14 @@ class SlamMapper(CameraMotionMixIn):
             return ""
 
     def run(self) -> None:
-        import time
-
         self._load()
 
         _stop = threading.Event()
-        cam = self._open_camera()
+        camera_kwargs = {}
+        if self._config.max_exposure_ms is not None:
+            camera_kwargs["exposure_max_ms"] = self._config.max_exposure_ms
+            logger.info(f"Camera auto-exposure capped at {self._config.max_exposure_ms:g} ms")
+        cam = self._open_camera(**camera_kwargs)
 
         if self._config.stream:
             self._start_server_stream(stream_port=self._config.stream_port)
@@ -518,107 +578,50 @@ class SlamMapper(CameraMotionMixIn):
                 self._frame_idx += 1
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                t0 = time.perf_counter()
                 if self._backend == "orbslam3":
                     state = self._process_frame_orbslam3(gray, ts)
                     label = _ORBSLAM3_STATES.get(state, "UNKNOWN")
                 else:
                     state = self._process_frame_orbslam2(gray, ts)
                     label = _ORBSLAM2_STATES.get(state, "UNKNOWN")
+                t_slam = time.perf_counter() - t0
                 backend_label = _BACKEND_LABELS[self._backend]
 
-                # get_trajectory_points() walks the whole map and copies it into Python —
-                # not free, and it grows as the map does. Only pay for it on frames where
-                # it's actually used (a state change, or an active stream), not every frame.
                 state_changed = label != self._last_state_label
                 if state_changed:
                     logger.info(
                         f"{backend_label} state changed: {self._last_state_label} -> {label}  "
                         f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s  "
-                        f"map #{len(self._map_starts) + 1})"
+                        f"map #{self._map_number()})"
                     )
                     self._handle_state_change(self._last_state_label, label, ts)
                     self._last_state_label = label
+                self._check_map_merge()
 
+                # get_trajectory_points() walks the whole map and copies it into Python —
+                # not free, and it grows as the map does. Only pay for it on frames where
+                # it's actually used (a state change, or an active stream), not every frame.
+                t0 = time.perf_counter()
                 need_traj = state_changed or (self._config.stream and self._server is not None)
-                traj = self._current_map_poses(self._get_stamped_trajectory()) if need_traj else []
-
-                traj_info = (
-                    f"  map=#{len(self._map_starts) + 1}  poses={len(traj)}"
-                    f"{self._last_pose_xz(traj)}"
-                    if need_traj
-                    else ""
+                traj, earlier = (
+                    self._split_maps(self._get_map_trajectory()) if need_traj else ([], [])
                 )
-                need_diag = state_changed or self._frame_idx % _DIAG_INTERVAL == 0
+                t_traj = time.perf_counter() - t0
 
-                # opt(lazy=True) defers evaluating every arg (incl. calling
-                # _frame_diagnostics, which does a real ORB pass over the frame)
-                # until loguru confirms a DEBUG-level sink is actually active —
-                # so this costs nothing when only INFO/WARNING are enabled.
-                logger.opt(lazy=True).debug(
-                    "{} frame={}  dt={:.0f}ms  state={}{}{}{}",
-                    lambda backend_label=backend_label: backend_label,
-                    lambda: self._frame_idx,
-                    lambda dt=dt: dt * 1000,
-                    lambda label=label: label,
-                    lambda traj_info=traj_info: traj_info,
-                    lambda label=label: self._init_diagnostics() if label == "NOT_INIT" else "",
-                    lambda gray=gray, need_diag=need_diag: (
-                        self._frame_diagnostics(gray) if need_diag else ""
-                    ),
+                t0 = time.perf_counter()
+                self._push_view(frame, gray, traj, earlier, label)
+                t_view = time.perf_counter() - t0
+
+                self._log_frame(
+                    gray,
+                    label,
+                    dt,
+                    (t_slam, t_traj, t_view),
+                    traj if need_traj else None,
+                    state_changed,
                 )
-
-                if (
-                    label in ("NOT_INIT", "NO_IMAGES")
-                    and self._frame_idx == _STALL_WARN_FRAMES
-                    and not self._stall_warned
-                ):
-                    self._stall_warned = True
-                    logger.warning(
-                        f"{backend_label} still {label} after {_STALL_WARN_FRAMES} frames. "
-                        "Re-run with DEBUG logging enabled to see the per-frame diagnostics: "
-                        "cv2_orb_kpts near 0 means the camera feed itself is unusable "
-                        "(dark/blurry/low-texture); a healthy keypoint count with no init "
-                        "means the motion so far is degenerate for triangulation — drive "
-                        "with forward/backward translation, not pure in-place turns, "
-                        "until state changes to OK."
-                    )
-
-                if self._config.stream and self._server is not None:
-                    h, w = frame.shape[:2]
-                    scale = 2
-                    if self._config.visualize:
-                        (
-                            keypoints,
-                            matches,
-                            inlier_mask,
-                            prev_frame,
-                            prev_kps,
-                        ) = self._update_visualization(frame, gray)
-                        view = self._render_visualization_view(
-                            traj,
-                            frame,
-                            keypoints,
-                            matches,
-                            inlier_mask,
-                            prev_frame,
-                            prev_kps,
-                            label,
-                            self._backend,
-                            w * scale,
-                            h * scale,
-                            self._map_label(),
-                        )
-                    else:
-                        view = self._render_map_view(
-                            traj,
-                            frame,
-                            label,
-                            self._backend,
-                            w * scale,
-                            h * scale,
-                            self._map_label(),
-                        )
-                    self._push_frame(view)
+                self._maybe_warn_stall(label)
 
         except KeyboardInterrupt:
             pass
@@ -632,6 +635,102 @@ class SlamMapper(CameraMotionMixIn):
             self._close_camera(cam)
             logger.info("SLAM stopped.")
 
+    def _push_view(  # pylint: disable=too-many-positional-arguments
+        self, frame: np.ndarray, gray: np.ndarray, traj: list, earlier: list, label: str
+    ) -> None:
+        """Render the map view (or --visualize debug view) into the MJPEG stream."""
+        if not (self._config.stream and self._server is not None):
+            return
+        h, w = frame.shape[:2]
+        scale = 2
+        map_label = self._map_label(len(earlier))
+        if self._config.visualize:
+            keypoints, matches, inlier_mask, prev_frame, prev_kps = self._update_visualization(
+                frame, gray
+            )
+            view = self._render_visualization_view(
+                traj,
+                frame,
+                keypoints,
+                matches,
+                inlier_mask,
+                prev_frame,
+                prev_kps,
+                label,
+                self._backend,
+                w * scale,
+                h * scale,
+                map_label,
+                earlier,
+            )
+        else:
+            view = self._render_map_view(
+                traj, frame, label, self._backend, w * scale, h * scale, map_label, earlier
+            )
+        self._push_frame(view)
+
+    def _log_frame(  # pylint: disable=too-many-positional-arguments
+        self,
+        gray: np.ndarray,
+        label: str,
+        dt: float,
+        timings: Tuple[float, float, float],
+        traj: Optional[list],
+        state_changed: bool,
+    ) -> None:
+        """
+        Per-frame DEBUG line. timings = (t_slam, t_traj, t_view) in seconds: time
+        in the backend's process_image_mono, in fetching and splitting the
+        trajectory, and in rendering + pushing the stream frame. traj is None on
+        frames where the trajectory wasn't fetched.
+        """
+        backend_label = _BACKEND_LABELS[self._backend]
+        t_slam, t_traj, t_view = timings
+        timing = (
+            f"  t_slam={t_slam * 1000:.0f}ms  t_traj={t_traj * 1000:.0f}ms"
+            f"  t_view={t_view * 1000:.0f}ms"
+        )
+        traj_info = (
+            ""
+            if traj is None
+            else f"  map=#{self._map_number()}  poses={len(traj)}{self._last_pose_xz(traj)}"
+        )
+        need_diag = state_changed or self._frame_idx % _DIAG_INTERVAL == 0
+
+        # opt(lazy=True) defers evaluating every arg (incl. calling
+        # _frame_diagnostics, which does a real ORB pass over the frame)
+        # until loguru confirms a DEBUG-level sink is actually active —
+        # so this costs nothing when only INFO/WARNING are enabled.
+        logger.opt(lazy=True).debug(
+            "{} frame={}  dt={:.0f}ms{}  state={}{}{}{}",
+            lambda: backend_label,
+            lambda: self._frame_idx,
+            lambda: dt * 1000,
+            lambda: timing,
+            lambda: label,
+            lambda: traj_info,
+            lambda: self._init_diagnostics() if label == "NOT_INIT" else "",
+            lambda: self._frame_diagnostics(gray) if need_diag else "",
+        )
+
+    def _maybe_warn_stall(self, label: str) -> None:
+        """One warning if the map still hasn't initialized after _STALL_WARN_FRAMES frames."""
+        if (
+            label in ("NOT_INIT", "NO_IMAGES")
+            and self._frame_idx == _STALL_WARN_FRAMES
+            and not self._stall_warned
+        ):
+            self._stall_warned = True
+            logger.warning(
+                f"{_BACKEND_LABELS[self._backend]} still {label} after {_STALL_WARN_FRAMES} "
+                "frames. Re-run with DEBUG logging enabled to see the per-frame diagnostics: "
+                "cv2_orb_kpts near 0 means the camera feed itself is unusable "
+                "(dark/blurry/low-texture); a healthy keypoint count with no init "
+                "means the motion so far is degenerate for triangulation — drive "
+                "with forward/backward translation, not pure in-place turns, "
+                "until state changes to OK."
+            )
+
     @staticmethod
     def _annotate_frame(
         cam_frame: np.ndarray,
@@ -640,232 +739,3 @@ class SlamMapper(CameraMotionMixIn):
     ) -> np.ndarray:
         h, w = cam_frame.shape[:2]
         return SlamMapper._render_map_view([], cam_frame, state_label, backend, w, h)
-
-    @staticmethod
-    def _render_map_view(  # pylint: disable=too-many-positional-arguments
-        traj: list,
-        cam_frame: np.ndarray,
-        state_label: str,
-        backend: str,
-        canvas_w: int,
-        canvas_h: int,
-        map_label: str = "",
-    ) -> np.ndarray:
-        """
-        Top-down trajectory map (main) with live camera PiP in the top-right corner.
-
-        Canvas matches the camera frame dimensions so the stream size is consistent.
-        traj: 4x4 camera-to-world poses of the current map, oldest first.
-
-        Seen from above with the map's initial forward direction (+z) pointing up
-        and +x to the right. A hollow circle marks where the map started, the
-        filled circle is the current position, and the arrow is the camera's
-        current heading, so a turn in place is visible even though the
-        position doesn't change.
-        """
-        canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
-
-        if traj:
-            try:
-                positions = np.array([[T[0, 3], T[2, 3]] for T in traj], dtype=np.float32)
-                pad = 40
-                x_range = float(np.ptp(positions[:, 0])) or 1.0
-                z_range = float(np.ptp(positions[:, 1])) or 1.0
-                scale = min(
-                    (canvas_w - 2 * pad) / x_range,
-                    (canvas_h - 2 * pad) / z_range,
-                )
-                x_min, z_min = positions[:, 0].min(), positions[:, 1].min()
-                pts = [
-                    (int((x - x_min) * scale + pad), int(canvas_h - pad - (z - z_min) * scale))
-                    for x, z in positions
-                ]
-                for i in range(1, len(pts)):
-                    cv2.line(canvas, pts[i - 1], pts[i], (0, 180, 0), 1)
-                cv2.circle(canvas, pts[0], 5, (0, 180, 0), 1)
-                cv2.circle(canvas, pts[-1], 5, (0, 255, 0), -1)
-
-                # Heading: the camera's optical axis (+z in the camera frame) is the
-                # third column of the camera-to-world rotation; drop its height.
-                fwd = np.asarray(traj[-1], dtype=np.float64)[:3, 2]
-                norm = float(np.hypot(fwd[0], fwd[2]))
-                if norm > 1e-6:
-                    tip = (
-                        int(pts[-1][0] + _HEADING_ARROW_PX * fwd[0] / norm),
-                        int(pts[-1][1] - _HEADING_ARROW_PX * fwd[2] / norm),
-                    )
-                    cv2.arrowedLine(canvas, pts[-1], tip, (0, 255, 255), 2, cv2.LINE_AA, 0, 0.3)
-            except Exception as e:  # pylint: disable=broad-except
-                # Plotting is best-effort and must never take the stream down, but a
-                # silent `pass` here is exactly what hid the pose-shape bug for two
-                # rounds — log it so a bad frame is visible instead of just blank.
-                logger.debug(f"Map view render skipped this frame: {e}")
-
-        color = (0, 255, 0) if state_label == "OK" else (0, 0, 255)
-        cv2.putText(
-            canvas,
-            f"[{backend}] {state_label}",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
-        if map_label:
-            cv2.putText(
-                canvas,
-                map_label,
-                (10, 50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (200, 200, 200),
-                1,
-                cv2.LINE_AA,
-            )
-        cv2.putText(
-            canvas,
-            "TOP-DOWN MAP",
-            (10, canvas_h - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (100, 100, 100),
-            1,
-            cv2.LINE_AA,
-        )
-
-        # Camera PiP — top-right corner, 1/5 of canvas height
-        pip_h = canvas_h // 5
-        pip_w = int(cam_frame.shape[1] * pip_h / cam_frame.shape[0])
-        pip = cv2.resize(cam_frame, (pip_w, pip_h))
-        margin = 8
-        x1, y1 = canvas_w - pip_w - margin, margin
-        canvas[y1 - 2 : y1 + pip_h + 2, x1 - 2 : x1 + pip_w + 2] = (80, 80, 80)
-        canvas[y1 : y1 + pip_h, x1 : x1 + pip_w] = pip
-
-        return canvas
-
-    @staticmethod
-    def _render_features_panel(frame: np.ndarray, keypoints: list) -> np.ndarray:
-        """Camera-frame-sized panel: current frame with detected ORB keypoints circled."""
-        panel = cv2.drawKeypoints(frame, keypoints, None, color=(0, 255, 0))
-        cv2.putText(
-            panel,
-            f"ORB keypoints: {len(keypoints)}",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
-        )
-        return panel
-
-    @staticmethod
-    def _render_matches_panel(  # pylint: disable=too-many-positional-arguments
-        prev_frame: Optional[np.ndarray],
-        prev_kps: Optional[list],
-        frame: np.ndarray,
-        keypoints: list,
-        matches: list,
-        inlier_mask: Optional[np.ndarray],
-        w: int,
-        h: int,
-    ) -> np.ndarray:
-        """
-        Full-row-width panel: previous | current frame side by side. Every
-        ratio-test match is drawn in green (raw); the subset that also survives
-        RANSAC (fundamental-matrix fit) is drawn over it in blue — so a green-only
-        line is a match RANSAC rejected as an outlier. Blank (with a status
-        message) until a previous frame exists.
-        """
-        if prev_frame is None:
-            panel = np.zeros((h, 2 * w, 3), dtype=np.uint8)
-            cv2.putText(
-                panel,
-                "warming up...",
-                (10, h // 2),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (100, 100, 100),
-                2,
-                cv2.LINE_AA,
-            )
-            return panel
-
-        combined = cv2.drawMatches(
-            prev_frame,
-            prev_kps,
-            frame,
-            keypoints,
-            matches,
-            None,
-            matchColor=(0, 255, 0),
-            singlePointColor=None,
-            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
-        )
-        n_inliers = 0
-        if inlier_mask is not None:
-            n_inliers = int(inlier_mask.sum())
-            combined = cv2.drawMatches(
-                prev_frame,
-                prev_kps,
-                frame,
-                keypoints,
-                matches,
-                combined,
-                matchColor=(255, 0, 0),
-                singlePointColor=None,
-                matchesMask=inlier_mask.ravel().tolist(),
-                flags=cv2.DrawMatchesFlags_DRAW_OVER_OUTIMG
-                | cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
-            )
-        cv2.putText(
-            combined,
-            f"matches: {len(matches)} raw / {n_inliers} after RANSAC",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        return combined
-
-    @staticmethod
-    def _render_visualization_view(  # pylint: disable=too-many-positional-arguments
-        traj: list,
-        frame: np.ndarray,
-        keypoints: list,
-        matches: list,
-        inlier_mask: Optional[np.ndarray],
-        prev_frame: Optional[np.ndarray],
-        prev_kps: Optional[list],
-        state_label: str,
-        backend: str,
-        canvas_w: int,
-        canvas_h: int,
-        map_label: str = "",
-    ) -> np.ndarray:
-        """
-        Debug view for --visualize:
-            top:    trajectory map | detected ORB keypoints
-            bottom: frame-to-frame matches, full width (green=raw, blue=RANSAC inliers)
-        """
-        h, w = frame.shape[:2]
-
-        map_panel = SlamMapper._render_map_view(traj, frame, state_label, backend, w, h, map_label)
-        kp_panel = SlamMapper._render_features_panel(frame, keypoints)
-        match_panel = SlamMapper._render_matches_panel(
-            prev_frame, prev_kps, frame, keypoints, matches, inlier_mask, w, h
-        )
-
-        canvas = np.vstack(
-            [
-                np.hstack([map_panel, kp_panel]),
-                match_panel,
-            ]
-        )
-        if canvas.shape[:2] != (canvas_h, canvas_w):
-            canvas = cv2.resize(canvas, (canvas_w, canvas_h))
-        return canvas

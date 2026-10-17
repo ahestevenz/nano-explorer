@@ -69,8 +69,10 @@ _PARTIAL_SEQ_TIMEOUT: float = 0.1
 _INVERSE_ACTION = {"forward": "backward", "backward": "forward", "left": "right", "right": "left"}
 # Keypress history kept for recovery; only the last few seconds can ever be replayed.
 _HISTORY_KEEP_S: float = 5.0
-# Upper bound on how much motion one recovery replays. ORB-SLAM3 monocular gives
-# up relocalizing 3 s after tracking is lost, so the replay has to fit before that.
+# Default upper bound on how much motion one recovery replays. ORB-SLAM3
+# monocular gives up relocalizing 3 s after tracking is lost by default, so the
+# replay has to fit before that; SLAM passes a longer limit when the backend's
+# window is longer (System.RecentlyLostSeconds).
 _RECOVERY_MAX_S: float = 2.0
 # How long without a keypress before the operator counts as "hands off" and the
 # replay may start — replaying while a key is still held would fight the operator.
@@ -523,11 +525,11 @@ class TeleopController(CameraMotionMixIn):
         """Stop a pending or running recovery; the replay worker stops the motors."""
         self._recover_cancel.set()
 
-    def request_recovery(self, since: float) -> bool:
+    def request_recovery(self, since: float, max_total: float = _RECOVERY_MAX_S) -> bool:
         """
         Start auto-recovery in the background: wait until the operator releases
         the keys, then replay their moves since `since` in reverse (newest first,
-        each inverted, at most _RECOVERY_MAX_S in total), and stop.
+        each inverted, at most `max_total` seconds in total), and stop.
 
         Any arrow key, or cancel_recovery() (e.g. SLAM relocalized), ends it early.
         Returns False if a recovery is already running.
@@ -536,12 +538,15 @@ class TeleopController(CameraMotionMixIn):
             return False
         self._recover_cancel.clear()
         self._recover_thread = threading.Thread(
-            target=self._recovery_worker, args=(since,), daemon=True, name="teleop-recover"
+            target=self._recovery_worker,
+            args=(since, max_total),
+            daemon=True,
+            name="teleop-recover",
         )
         self._recover_thread.start()
         return True
 
-    def _recovery_worker(self, since: float) -> None:
+    def _recovery_worker(self, since: float, max_total: float) -> None:
         while not self._recover_cancel.is_set():
             if time.time() - self._last_key_ts >= _RECOVERY_IDLE_S:
                 break
@@ -552,9 +557,7 @@ class TeleopController(CameraMotionMixIn):
         with self._history_lock:
             events = list(self._history)
             until = self._last_key_ts + _KEY_TIMEOUT
-        plan = _reverse_plan(
-            _segments_from_events(events, since, until, _KEY_TIMEOUT), _RECOVERY_MAX_S
-        )
+        plan = _reverse_plan(_segments_from_events(events, since, until, _KEY_TIMEOUT), max_total)
         if not plan:
             logger.info("[recover] no recent moves to undo — drive back toward the mapped view")
             return

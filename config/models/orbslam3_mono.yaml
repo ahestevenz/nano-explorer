@@ -16,6 +16,12 @@
 # Download from: https://github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary
 Vocabulary: "assets/models/ORBvoc.txt"
 
+# How long (s) tracking keeps trying to relocalize in the current map after it's
+# lost, before ORB-SLAM3 stores that map and starts a new, unconnected one.
+# Upstream hard-codes 3 s. Needs the nano-explorer pyorbslam fork; older builds
+# ignore it (always 3 s), and nano-explorer logs a warning if it differs.
+System.RecentlyLostSeconds: 8.0
+
 Camera.type: "PinHole"
 
 Camera.fx: 530.067336
