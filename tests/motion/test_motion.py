@@ -524,3 +524,44 @@ class TestCameraExposure:
         from lib.camera import _exposure_range
 
         assert _exposure_range(0.001) == ' exposuretimerange="13000 13000"'
+
+
+# lib/motor.py — per-wheel speeds (steer / set_speeds)
+class TestMotorWheelSpeeds:
+    def test_physical_speeds_map_to_swapped_negated_jetbot_motors(self):
+        from lib.motor import _to_jetbot_motors
+
+        # Physical left 0.3, right 0.1: jetbot's left_motor is the physical right wheel,
+        # and jetbot "forward" is this chassis' backward.
+        assert _to_jetbot_motors(0.3, 0.1) == (pytest.approx(-0.1), pytest.approx(-0.3))
+
+    def test_forward_matches_inverted_robot_forward(self):
+        from lib.motor import _to_jetbot_motors
+
+        # InvertedRobot.forward(s) is jetbot backward(s): both jetbot motors at -s.
+        assert _to_jetbot_motors(0.2, 0.2) == (pytest.approx(-0.2), pytest.approx(-0.2))
+
+    def _controller(self, robot_cls):
+        import lib.motor as motor_mod
+
+        with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
+            motor_mod, "InvertedRobot", robot_cls, create=True
+        ):
+            controller = motor_mod.MotorController(left_trim=1.0, right_trim=1.0)
+            controller.open()
+        return controller
+
+    def test_set_speeds_goes_through_inverted_robot(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.set_speeds(0.3, 0.1)
+        robot = robot_cls.return_value
+        robot.set_motors.assert_called_once_with(pytest.approx(0.3), pytest.approx(0.1))
+
+    def test_steer_right_drives_left_wheel_faster(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.steer(0.2, 0.1)
+        left, right = robot_cls.return_value.set_motors.call_args[0]
+        assert left == pytest.approx(0.3)
+        assert right == pytest.approx(0.1)
