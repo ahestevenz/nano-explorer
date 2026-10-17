@@ -900,3 +900,77 @@ class TestSlamExposureFlag:
 
     def test_flag_sets_value(self):
         assert _parse(["slam", "--max-exposure-ms", "10"]).max_exposure_ms == pytest.approx(10.0)
+
+
+class TestTrajectoryRefresh:
+    def _mapper(self):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(
+            config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"), stream=True
+        )
+        mapper._server = MagicMock()  # streaming active
+        mapper._split_maps = MagicMock(return_value=([np.eye(4)], []))
+        mapper._get_map_trajectory = MagicMock(return_value=[])
+        return mapper
+
+    def test_full_fetch_only_every_nth_frame_while_streaming(self):
+        from lib.map.slam import _TRAJ_REFRESH_FRAMES
+
+        mapper = self._mapper()
+        fetched = []
+        for frame in range(1, 3 * _TRAJ_REFRESH_FRAMES + 1):
+            mapper._frame_idx = frame
+            fetched.append(mapper._view_trajectory(state_changed=False, label="OK")[2])
+        # first frame (empty cache) + every Nth frame
+        expected = [f == 1 or f % _TRAJ_REFRESH_FRAMES == 0 for f in range(1, len(fetched) + 1)]
+        assert fetched == expected
+
+    def test_state_change_always_fetches(self):
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")
+        mapper._frame_idx = 2
+        assert mapper._view_trajectory(state_changed=True, label="RECENTLY_LOST")[2] is True
+
+    def test_live_poses_extend_cached_path_until_next_fetch(self):
+        from lib.map.slam import _TRAJ_REFRESH_FRAMES
+
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")  # fetch: 1 cached pose
+        mapper._live_pose = np.eye(4)
+        mapper._frame_idx = 2
+        traj, _, fetched = mapper._view_trajectory(state_changed=False, label="OK")
+        assert not fetched and len(traj) == 2
+        mapper._frame_idx = 3
+        assert len(mapper._view_trajectory(state_changed=False, label="OK")[0]) == 3
+        mapper._frame_idx = _TRAJ_REFRESH_FRAMES
+        traj, _, fetched = mapper._view_trajectory(state_changed=False, label="OK")
+        assert fetched and len(traj) == 1  # live poses dropped: the fetch includes them
+
+    def test_live_pose_not_added_while_lost(self):
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")
+        mapper._live_pose = np.eye(4)
+        mapper._frame_idx = 2
+        assert len(mapper._view_trajectory(state_changed=False, label="RECENTLY_LOST")[0]) == 1
+
+    def test_without_stream_fetches_only_on_state_change(self):
+        mapper = self._mapper()
+        mapper._server = None
+        for frame in range(1, 11):
+            mapper._frame_idx = frame
+            assert mapper._view_trajectory(state_changed=False, label="OK")[2] is False
+        assert mapper._view_trajectory(state_changed=True, label="LOST")[2] is True
+
+    def test_pose_from_tcw(self):
+        from lib.map.slam import SlamMapper
+
+        assert SlamMapper._pose_from_tcw(np.zeros((4, 4))) is None
+        assert SlamMapper._pose_from_tcw(np.zeros((3, 3))) is None
+        tcw = np.eye(4)
+        tcw[2, 3] = -1.0  # world-to-camera translation; the camera itself sits at z = +1
+        twc = SlamMapper._pose_from_tcw(tcw)
+        assert twc[2, 3] == pytest.approx(1.0)

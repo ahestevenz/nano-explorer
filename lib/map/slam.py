@@ -87,6 +87,14 @@ _DEFAULT_RECENTLY_LOST_S = 3.0
 _RECOVERY_MARGIN_S = 1.0
 _RECOVERY_REPLAY_CAP_S = 8.0
 
+# While streaming, fetch the full trajectory only every this many frames (and on
+# every state change). The binding copies every pose of every map into Python on
+# each call — about 150-220 ms per frame after a few minutes, growing with the
+# run — while the view only needs the current map. In between, the current
+# pose that process_image_mono() returns (ORB-SLAM3) is appended to the cached
+# path, so position and heading stay live; the full path catches up every N frames.
+_TRAJ_REFRESH_FRAMES = 5
+
 
 class SlamConfig(BaseModel):
     """
@@ -127,6 +135,20 @@ class SlamConfig(BaseModel):
         return v
 
 
+class _TrajectoryCache:  # pylint: disable=too-few-public-methods
+    """
+    Trajectory for the stream between full fetches (see _TRAJ_REFRESH_FRAMES):
+    the last fetch split into the current map's poses and earlier maps, plus the
+    live poses tracked since then.
+    """
+
+    def __init__(self) -> None:
+        self.current: list = []
+        self.earlier: list = []
+        self.valid = False
+        self.live: list = []
+
+
 class SlamMapper(CameraMotionMixIn):
     """
     Run monocular SLAM using ORB-SLAM2 or ORB-SLAM3.
@@ -152,6 +174,8 @@ class SlamMapper(CameraMotionMixIn):
         self._map_starts: List[float] = []
         self._last_map_count: Optional[int] = None
         self._recently_lost_s = _DEFAULT_RECENTLY_LOST_S
+        self._traj_cache = _TrajectoryCache()
+        self._live_pose: Optional[np.ndarray] = None
 
     def _load(self) -> None:
         import yaml
@@ -297,8 +321,48 @@ class SlamMapper(CameraMotionMixIn):
         # GrabImageMonocular handles single-channel input directly (no internal
         # cvtColor when the image is already gray), so passing gray here — same
         # as the orbslam2 path — avoids a redundant color conversion.
-        self._slam.process_image_mono(gray, timestamp, "")
+        self._live_pose = self._pose_from_tcw(self._slam.process_image_mono(gray, timestamp, ""))
         return int(self._slam.get_tracking_state())
+
+    @staticmethod
+    def _pose_from_tcw(tcw: Any) -> Optional[np.ndarray]:
+        """
+        Camera-to-world pose from the world-to-camera matrix ORB-SLAM3's
+        process_image_mono() returns, or None when tracking failed (it returns
+        all zeros then) or the result isn't a 4x4 matrix.
+        """
+        try:
+            tcw = np.asarray(tcw, dtype=np.float64)
+            if tcw.shape != (4, 4) or not tcw.any():
+                return None
+            return np.linalg.inv(tcw)
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            return None
+
+    def _view_trajectory(self, state_changed: bool, label: str) -> Tuple[list, list, bool]:
+        """
+        (current map poses, earlier maps, fetched) for this frame.
+
+        Fetches the full trajectory on state changes, and while streaming every
+        _TRAJ_REFRESH_FRAMES frames; otherwise reuses the cache and appends the
+        live pose of each tracked frame since the last fetch. fetched says
+        whether this frame did a full fetch.
+        """
+        streaming = self._config.stream and self._server is not None
+        refresh = state_changed or (
+            streaming
+            and (not self._traj_cache.valid or self._frame_idx % _TRAJ_REFRESH_FRAMES == 0)
+        )
+        cache = self._traj_cache
+        if refresh:
+            cache.current, cache.earlier = self._split_maps(self._get_map_trajectory())
+            cache.valid = True
+            cache.live = []
+            return cache.current, cache.earlier, True
+
+        if label in ("OK", "OK_KLT") and self._live_pose is not None:
+            cache.live.append(self._live_pose)
+        return cache.current + cache.live, cache.earlier, False
 
     def _frame_diagnostics(self, gray: np.ndarray) -> str:
         """
@@ -599,14 +663,12 @@ class SlamMapper(CameraMotionMixIn):
                     self._last_state_label = label
                 self._check_map_merge()
 
-                # get_trajectory_points() walks the whole map and copies it into Python —
-                # not free, and it grows as the map does. Only pay for it on frames where
-                # it's actually used (a state change, or an active stream), not every frame.
+                # The full trajectory is expensive and grows with the run, so it's only
+                # fetched on state changes and every _TRAJ_REFRESH_FRAMES frames while
+                # streaming; see _view_trajectory.
                 t0 = time.perf_counter()
-                need_traj = state_changed or (self._config.stream and self._server is not None)
-                traj, earlier = (
-                    self._split_maps(self._get_map_trajectory()) if need_traj else ([], [])
-                )
+                traj, earlier, fetched = self._view_trajectory(state_changed, label)
+                need_traj = fetched or (self._config.stream and self._server is not None)
                 t_traj = time.perf_counter() - t0
 
                 t0 = time.perf_counter()
