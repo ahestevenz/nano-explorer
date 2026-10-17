@@ -1,11 +1,9 @@
 # Minimal SLAM configuration
-# Requires the ORB-SLAM2 Python bindings from github.com/jskinn/ORB_SLAM2-PythonBindings
+# Requires the ORB-SLAM2 Python bindings from github.com/ahestevenz/ORB_SLAM2-PythonBindings
+# (backend: orbslam2) or the ORB-SLAM3 bindings from github.com/ahestevenz/pyorbslam
+# (backend: orbslam3).
+#
+# The vocabulary path and camera-calibration settings live in the backend's own
+# settings file (config/models/orbslam2_mono.yaml or orbslam3_mono.yaml) — see
+# the "Vocabulary" key there. Nothing else to configure here.
 backend: orbslam2
-
-# ORB-SLAM2: path to the ORB vocabulary file
-# Download from: https://github.com/raulmur/ORB_SLAM2/tree/master/Vocabulary
-vocabulary: assets/models/ORBvoc.txt
-
-# ORB-SLAM2 camera calibration YAML (OpenCV FileStorage format)
-# Calibrate your camera and update config/models/orbslam2_mono.yaml
-settings: config/models/orbslam2_mono.yaml

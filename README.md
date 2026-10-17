@@ -248,15 +248,56 @@ nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (defa
 nano-explorer map odometry --stream-port PORT
 nano-explorer map odometry --no-stream
 
-# Monocular SLAM — ORB-SLAM2 backend
+# Monocular SLAM — ORB-SLAM2 or ORB-SLAM3 backend (set in slam.yaml)
 # Stream shows a live top-down trajectory map with camera picture-in-picture
 nano-explorer map slam
 nano-explorer map slam --config YAML                   # config (default: ~/.nano-explorer/config/models/slam.yaml)
-nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.3)
+nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (default: 0.2)
 nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
+nano-explorer map slam --visualize                     # debug view: keypoints + frame-to-frame matches
+nano-explorer map slam --no-auto-recover               # don't reverse your last moves when tracking is lost
+nano-explorer map slam --max-exposure-ms MS            # cap auto-exposure (e.g. 10) to reduce motion blur; needs good light
 ```
+
+##### Reading the map view
+
+The stream shows the **current map only**, seen from above with the map's starting direction
+pointing up. The hollow circle is where the map started, the filled circle is the robot now, and
+the yellow arrow is the camera's heading, so a turn in place shows up as the arrow rotating.
+
+A single camera can't keep its bearings once tracking has been lost for too long: ORB-SLAM3 then
+stores the map and starts a new one, with its own origin, heading and scale. Earlier maps are drawn
+as thumbnails along the bottom right (the three most recent, each in its own axes, since they
+aren't connected to the current map), the overlay says `map #N · … earlier maps in thumbnails`,
+and the log prints a warning each time. When the robot later sees a place from an earlier map,
+ORB-SLAM3 merges the two, the log says so, and the merged path appears in the main view again.
+
+How long ORB-SLAM3 keeps trying to relocalize before giving up is set by
+`System.RecentlyLostSeconds` in `~/.nano-explorer/config/models/orbslam3_mono.yaml` (bundled
+default 8 s; upstream ORB-SLAM3 hard-codes 3 s). It needs pyorbslam built from the nano-explorer
+fork: an older build always uses 3 s, and nano-explorer logs a warning if the setting asks for
+something else. Auto-recovery replays up to that window minus 1 s (at most 8 s) of your moves.
+Merged paths in the main view also need the fork; older builds still show thumbnails.
+
+With DEBUG logging, each frame line includes `t_slam` (time inside ORB-SLAM), `t_traj` (fetching
+the trajectory) and `t_view` (drawing and streaming the map), to show where frame time goes.
+
+##### Driving for SLAM
+
+- **Light and texture matter most.** Daylight or a lamp on the scene, and point the camera at
+  textured things (shelves, posters, clutter), not plain walls or floor.
+- **Start by driving forward** for a couple of seconds. A map can't initialize while parked or
+  while turning in place.
+- **Turn in short taps with a pause between them**, and drive forward a little between taps so
+  new map points are added as the view rotates. A long, held turn is the most common way to lose
+  tracking.
+- **When tracking is lost, let go of the keys.** Auto-recovery replays your last moves in reverse
+  to bring the camera back to the mapped view, and hands control back as soon as it relocalizes.
+  Press any arrow key to take over at any time.
+- **When re-initializing, drive slowly** (`--speed 0.1`–`0.15`). Fast motion moves features
+  further between frames than the initializer searches.
 
 ##### Camera calibration
 

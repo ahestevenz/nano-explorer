@@ -89,9 +89,9 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     p_slam.add_argument(
         "--speed",
         type=float,
-        default=0.3,
+        default=0.2,
         metavar="SPEED",
-        help="Motor speed 0.0-1.0 (default: 0.3)",
+        help="Motor speed 0.0-1.0 (default: 0.2)",
     )
     p_slam.add_argument(
         "--turn-gain",
@@ -100,6 +100,30 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         dest="turn_gain",
         metavar="GAIN",
         help="Turn gain 0.0-1.0 (default: 0.5)",
+    )
+    p_slam.add_argument(
+        "--visualize",
+        action="store_true",
+        default=False,
+        help="Show a debug view in the stream: trajectory map + detected ORB "
+        "keypoints on top, frame-to-frame matches below (green=raw, "
+        "blue=surviving RANSAC)",
+    )
+    p_slam.add_argument(
+        "--no-auto-recover",
+        action="store_false",
+        dest="auto_recover",
+        default=True,
+        help="Don't reverse your last moves automatically when tracking is lost",
+    )
+    p_slam.add_argument(
+        "--max-exposure-ms",
+        type=float,
+        default=None,
+        dest="max_exposure_ms",
+        metavar="MS",
+        help="Cap the camera's auto-exposure time to reduce motion blur, e.g. 10 "
+        "(default: camera's own range). Needs good light: frames get darker and noisier",
     )
     p_slam.set_defaults(func=_run_slam)
 

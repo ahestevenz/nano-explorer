@@ -7,6 +7,11 @@ Run with:
     pytest tests/map/ -v -m "not hardware"
 """
 
+# pylint: disable=redefined-outer-name
+# Every test below that takes `fake_project_env` as a parameter is pytest's
+# fixture-injection pattern, not a real shadowing of the fixture function
+# defined at module scope — pylint can't tell the two apart.
+
 import argparse
 import os
 from unittest.mock import MagicMock, patch
@@ -37,6 +42,33 @@ def _parse(args: list, settings: NanoSettings = None) -> argparse.Namespace:
 
 def _dummy_frame(h=480, w=640) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+@pytest.fixture
+def fake_project_env(tmp_path, monkeypatch):
+    """
+    Isolated fake PROJECT_ROOT_PATH + USER_CONFIG_DIR for testing
+    SlamMapper._resolve_settings / _resolve_vocab without touching the real package
+    config/ or ~/.nano-explorer/config/. Returns (project_root, user_config_dir).
+    """
+    import lib.map.slam as slam_mod
+    import lib.settings as settings_mod
+
+    project_root = tmp_path / "project"
+    user_config_dir = tmp_path / "home" / ".nano-explorer" / "config"
+    (project_root / "config" / "models").mkdir(parents=True)
+    (project_root / "assets" / "models").mkdir(parents=True)
+    (project_root / "config" / "models" / "orbslam3_mono.yaml").write_text(
+        'Vocabulary: "assets/models/ORBvoc.txt"\nCamera.type: PinHole\nCamera.fx: 111.0\n',
+        encoding="utf-8",
+    )
+    (project_root / "assets" / "models" / "ORBvoc.txt").write_text("fake vocab", encoding="utf-8")
+
+    monkeypatch.setattr(settings_mod, "USER_CONFIG_DIR", user_config_dir)
+    monkeypatch.setattr(settings_mod, "PROJECT_ROOT_PATH", project_root)
+    monkeypatch.setattr(slam_mod, "PROJECT_ROOT_PATH", project_root)
+
+    return project_root, user_config_dir
 
 
 # commands/mapping.py — sub-command structure
@@ -98,6 +130,22 @@ class TestSlamDefaults:
     def test_no_stream_flag(self):
         ns = _parse(["slam", "--no-stream"])
         assert ns.stream is False
+
+    def test_default_visualize_is_false(self):
+        ns = _parse(["slam"])
+        assert ns.visualize is False
+
+    def test_visualize_flag(self):
+        ns = _parse(["slam", "--visualize"])
+        assert ns.visualize is True
+
+    def test_default_speed_is_slower_than_other_commands(self):
+        ns = _parse(["slam"])
+        assert ns.speed == pytest.approx(0.2)
+
+    def test_custom_speed(self):
+        ns = _parse(["slam", "--speed", "0.3"])
+        assert ns.speed == pytest.approx(0.3)
 
     def test_func_is_set(self):
         from commands.mapping import _run_slam
@@ -275,6 +323,12 @@ class TestSlamConfig:
         cfg = SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
         assert cfg.stream is False
 
+    def test_default_speed(self):
+        from lib.map.slam import SlamConfig
+
+        cfg = SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
+        assert cfg.speed == pytest.approx(0.2)
+
     def test_missing_config_raises(self, tmp_path):
         from pydantic import ValidationError
 
@@ -315,3 +369,608 @@ class TestSlamMapper:
         out_lost = SlamMapper._annotate_frame(frame.copy(), "LOST", "orbslam2")
         # Different state labels should produce different colours
         assert not np.array_equal(out_ok, out_lost)
+
+
+# lib/map/slam.py — --visualize rendering
+class TestSlamVisualization:
+    def test_update_visualization_first_call_has_no_prev(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        frame = _dummy_frame()
+        gray = np.zeros((480, 640), dtype=np.uint8)
+        _, matches, inlier_mask, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+
+        assert prev_frame is None
+        assert prev_kps is None
+        assert inlier_mask is None
+        assert not matches
+
+    def test_update_visualization_second_call_has_prev(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        frame = _dummy_frame()
+        gray = np.zeros((480, 640), dtype=np.uint8)
+
+        mapper._update_visualization(frame, gray)
+        _, _, _, prev_frame, prev_kps = mapper._update_visualization(frame, gray)
+
+        assert prev_frame is not None
+        assert prev_frame.shape == frame.shape
+
+    def test_ransac_inlier_mask_too_few_matches(self):
+        from lib.map.slam import SlamMapper
+
+        assert SlamMapper._ransac_inlier_mask([], [], []) is None
+
+    def test_render_features_panel_draws_keypoints(self):
+        import cv2
+
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        kps = [cv2.KeyPoint(x=320.0, y=240.0, size=5.0)]
+        out = SlamMapper._render_features_panel(frame.copy(), kps)
+        assert out.shape == frame.shape
+        assert not np.array_equal(out, frame)
+
+    def test_render_matches_panel_no_prev_frame(self):
+        from lib.map.slam import SlamMapper
+
+        panel = SlamMapper._render_matches_panel(None, None, _dummy_frame(), [], [], None, 640, 480)
+        # Full row width (2x) since the camera panel above it was removed.
+        assert panel.shape == (480, 1280, 3)
+
+    def test_render_matches_panel_with_prev_frame_and_inliers(self):
+        import cv2
+
+        from lib.map.slam import SlamMapper
+
+        prev_frame = _dummy_frame()
+        frame = _dummy_frame()
+        kps = [cv2.KeyPoint(x=320.0, y=240.0, size=5.0), cv2.KeyPoint(x=100.0, y=100.0, size=5.0)]
+        prev_kps = [
+            cv2.KeyPoint(x=321.0, y=241.0, size=5.0),
+            cv2.KeyPoint(x=99.0, y=99.0, size=5.0),
+        ]
+        matches = [
+            cv2.DMatch(_queryIdx=0, _trainIdx=0, _distance=1.0),
+            cv2.DMatch(_queryIdx=1, _trainIdx=1, _distance=2.0),
+        ]
+        inlier_mask = np.array([[1], [0]], dtype=np.uint8)
+        panel = SlamMapper._render_matches_panel(
+            prev_frame, prev_kps, frame, kps, matches, inlier_mask, 640, 480
+        )
+        assert panel.shape == (480, 1280, 3)
+
+    def test_render_visualization_view_canvas_size(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        out = SlamMapper._render_visualization_view(
+            [], frame, [], [], None, None, None, "NOT_INIT", "orbslam2", 1280, 960
+        )
+        assert out.shape == (960, 1280, 3)
+
+
+# lib/map/slam.py — ORB-SLAM2/3 backend selection and shared state constants
+class TestBackendConstants:
+    def test_valid_backends_includes_both(self):
+        from lib.map.slam import _VALID_BACKENDS
+
+        assert ["orbslam2", "orbslam3"] == _VALID_BACKENDS
+
+    def test_orbslam2_states_unchanged(self):
+        from lib.map.slam import _ORBSLAM2_STATES
+
+        assert {
+            -1: "NOT_READY",
+            0: "NO_IMAGES",
+            1: "NOT_INIT",
+            2: "OK",
+            3: "LOST",
+        } == _ORBSLAM2_STATES
+
+    def test_orbslam3_states_diverge_from_orbslam2_at_3(self):
+        from lib.map.slam import _ORBSLAM3_STATES
+
+        assert {
+            -1: "NOT_READY",
+            0: "NO_IMAGES",
+            1: "NOT_INIT",
+            2: "OK",
+            3: "RECENTLY_LOST",
+            4: "LOST",
+            5: "OK_KLT",
+        } == _ORBSLAM3_STATES
+
+    def test_states_share_the_common_prefix_by_identity(self):
+        # Both dicts are built from _STATES_COMMON — assert the shared keys
+        # actually come from the same object, not two independently
+        # hand-written copies that could drift apart.
+        from lib.map.slam import _ORBSLAM2_STATES, _ORBSLAM3_STATES, _STATES_COMMON
+
+        for key, value in _STATES_COMMON.items():
+            assert _ORBSLAM2_STATES[key] == value
+            assert _ORBSLAM3_STATES[key] == value
+
+    def test_backend_labels(self):
+        from lib.map.slam import _BACKEND_LABELS
+
+        assert {"orbslam2": "ORB-SLAM2", "orbslam3": "ORB-SLAM3"} == _BACKEND_LABELS
+
+
+class TestLoadDispatch:
+    def test_load_dispatches_to_orbslam3(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: orbslam3\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+        mapper._load_orbslam2 = MagicMock()
+        mapper._load_orbslam3 = MagicMock()
+
+        mapper._load()
+
+        mapper._load_orbslam3.assert_called_once()
+        mapper._load_orbslam2.assert_not_called()
+
+    def test_load_dispatches_to_orbslam2_by_default(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: orbslam2\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+        mapper._load_orbslam2 = MagicMock()
+        mapper._load_orbslam3 = MagicMock()
+
+        mapper._load()
+
+        mapper._load_orbslam2.assert_called_once()
+        mapper._load_orbslam3.assert_not_called()
+
+    def test_load_rejects_invalid_backend(self, tmp_path):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        cfg_file = tmp_path / "slam.yaml"
+        cfg_file.write_text("backend: rtabmap\n", encoding="utf-8")
+        mapper = SlamMapper(**SlamConfig(config_path=str(cfg_file)).dict())
+
+        with pytest.raises(ValueError, match="backend must be one of"):
+            mapper._load()
+
+    def test_load_orbslam3_missing_bindings_raises(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        # pyorbslam isn't installed in this test environment (unlike orbslam2,
+        # which conftest.py mocks away) — this exercises the real ImportError path.
+        with pytest.raises(RuntimeError, match="pyorbslam"):
+            mapper._load_orbslam3()
+
+
+# lib/map/slam.py — settings path resolution (fixed per backend, seeded into
+# ~/.nano-explorer/config) and vocab resolution (read from the settings file itself)
+class TestResolveSettings:
+    def test_relative_config_path_seeds_user_config_dir(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, user_config_dir = fake_project_env
+
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+
+        assert settings == user_config_dir / "models" / "orbslam3_mono.yaml"
+        assert settings.exists()
+        assert settings.read_text(encoding="utf-8") == (
+            project_root / "config" / "models" / "orbslam3_mono.yaml"
+        ).read_text(encoding="utf-8")
+
+    def test_user_edit_survives_a_second_resolve(self, fake_project_env):
+        # fake_project_env's monkeypatching is what makes _resolve_settings
+        # resolve into tmp_path at all here — the fixture's return value isn't needed.
+        del fake_project_env
+        from lib.map.slam import SlamMapper
+
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+        settings.write_text(
+            "Camera.type: PinHole\nCamera.fx: 999.0  # user-tuned\n", encoding="utf-8"
+        )
+
+        settings2 = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+
+        assert settings2 == settings
+        assert "999.0" in settings2.read_text(encoding="utf-8")
+
+
+class TestResolveVocab:
+    def test_vocab_relative_resolves_against_project_root(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+        vocab = SlamMapper._resolve_vocab(settings)
+
+        assert vocab == project_root / "assets" / "models" / "ORBvoc.txt"
+
+    def test_vocab_absolute_used_as_is(self, fake_project_env, tmp_path):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        abs_vocab = project_root / "assets" / "models" / "ORBvoc.txt"
+
+        settings = tmp_path / "custom_settings.yaml"
+        settings.write_text(f'Vocabulary: "{abs_vocab}"\n', encoding="utf-8")
+
+        vocab = SlamMapper._resolve_vocab(settings)
+
+        assert vocab == abs_vocab
+
+    def test_missing_vocabulary_key_falls_back_to_default(self, fake_project_env, tmp_path):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        settings = tmp_path / "no_vocab_key.yaml"
+        settings.write_text("Camera.type: PinHole\n", encoding="utf-8")
+
+        vocab = SlamMapper._resolve_vocab(settings)
+
+        assert vocab == project_root / "assets" / "models" / "ORBvoc.txt"
+
+    def test_missing_vocab_raises(self, fake_project_env):
+        from lib.map.slam import SlamMapper
+
+        project_root, _ = fake_project_env
+        (project_root / "assets" / "models" / "ORBvoc.txt").unlink()
+
+        settings = SlamMapper._resolve_settings("config/models/orbslam3_mono.yaml")
+        with pytest.raises(FileNotFoundError, match="ORB vocabulary not found"):
+            SlamMapper._resolve_vocab(settings)
+
+
+# lib/map/slam.py — ORB-SLAM3 frame processing and trajectory extraction
+class TestOrbslam3Processing:
+    def test_process_frame_calls_process_image_mono_with_filename_arg(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mock_slam = MagicMock()
+        mock_slam.get_tracking_state.return_value = 2
+        mapper._slam = mock_slam
+
+        gray = np.zeros((480, 640), dtype=np.uint8)
+        state = mapper._process_frame_orbslam3(gray, 123.456)
+
+        # Unlike orbslam2's binding, orbslam3's process_image_mono takes a
+        # third (filename) argument.
+        mock_slam.process_image_mono.assert_called_once_with(gray, 123.456, "")
+        assert state == 2
+
+    def test_get_trajectory_inverts_tcw_to_twc(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mapper._backend = "orbslam3"
+
+        # A camera translated +1 in x, +2 in z (identity rotation), expressed
+        # as Twc (world position = translation column) — pyorbslam instead
+        # returns the inverse (Tcw, world-to-camera), so _get_trajectory must
+        # invert it back before pose[0, 3]/pose[2, 3] mean "world position"
+        # the same way they do for the orbslam2 backend.
+        twc_expected = np.eye(4)
+        twc_expected[0, 3] = 1.0
+        twc_expected[2, 3] = 2.0
+        tcw = np.linalg.inv(twc_expected)
+
+        mock_slam = MagicMock()
+        mock_slam.get_trajectory_points.return_value = [(0.0, tcw)]
+        mapper._slam = mock_slam
+
+        traj = mapper._get_trajectory()
+
+        assert len(traj) == 1
+        assert np.allclose(traj[0], twc_expected)
+
+    def test_get_trajectory_dispatches_by_backend(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mapper._get_trajectory_orbslam2 = MagicMock(return_value=["v2"])
+        mapper._get_trajectory_orbslam3 = MagicMock(return_value=["v3"])
+
+        mapper._backend = "orbslam2"
+        assert mapper._get_trajectory() == ["v2"]
+
+        mapper._backend = "orbslam3"
+        assert mapper._get_trajectory() == ["v3"]
+
+    def test_get_trajectory_orbslam3_returns_empty_list_on_error(self):
+        from lib.map.slam import SlamConfig, SlamMapper
+
+        mapper = SlamMapper(
+            **SlamConfig(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml")).dict()
+        )
+        mock_slam = MagicMock()
+        mock_slam.get_trajectory_points.side_effect = RuntimeError("boom")
+        mapper._slam = mock_slam
+
+        assert mapper._get_trajectory_orbslam3() == []
+
+
+class TestInitDiagnostics:
+    def _mapper(self, backend, slam):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
+        mapper._backend = backend
+        mapper._slam = slam
+        return mapper
+
+    def test_orbslam3_reports_init_counters(self):
+        slam = MagicMock()
+        slam.get_last_init_detections.return_value = 812
+        slam.get_last_init_raw_matches.return_value = 64
+        slam.get_last_init_inlier_matches.return_value = -1
+        out = self._mapper("orbslam3", slam)._init_diagnostics()
+        assert out == "  init_kpts=812  init_raw=64  init_inl=-1"
+
+    def test_orbslam2_reports_nothing(self):
+        assert self._mapper("orbslam2", MagicMock())._init_diagnostics() == ""
+
+    def test_binding_without_accessors_reports_nothing(self):
+        slam = MagicMock(spec=["process_image_mono", "get_tracking_state"])
+        assert self._mapper("orbslam3", slam)._init_diagnostics() == ""
+
+
+class TestSlamAutoRecoverFlag:
+    def test_default_auto_recover_is_true(self):
+        assert _parse(["slam"]).auto_recover is True
+
+    def test_no_auto_recover_flag(self):
+        assert _parse(["slam", "--no-auto-recover"]).auto_recover is False
+
+
+class TestMapSegments:
+    def _mapper(self, backend="orbslam3"):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
+        mapper._backend = backend
+        mapper._slam = MagicMock(spec=["get_map_count"])
+        mapper._slam.get_map_count.return_value = 2
+        return mapper
+
+    def test_restart_after_tracking_records_new_map(self):
+        mapper = self._mapper()
+        mapper._handle_state_change("RECENTLY_LOST", "NO_IMAGES", ts=50.0)
+        assert mapper._map_starts == [50.0]
+        assert mapper._map_label().startswith("map #2")
+
+    def test_startup_is_not_a_restart(self):
+        mapper = self._mapper()
+        mapper._handle_state_change(None, "NOT_INIT", ts=1.0)
+        mapper._handle_state_change("NOT_INIT", "OK", ts=2.0)
+        assert not mapper._map_starts
+        assert mapper._map_label() == "map #1"
+
+    def test_split_maps_by_restart_time_without_map_ids(self):
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_map_count", "get_trajectory_points"])
+        tcws = [np.eye(4) for _ in range(4)]
+        mapper._slam.get_trajectory_points.return_value = list(zip([1.0, 2.0, 6.0, 7.0], tcws))
+        mapper._map_starts = [5.0]
+        current, earlier = mapper._split_maps(mapper._get_map_trajectory())
+        assert len(current) == 2
+        assert [(key, len(poses)) for key, poses in earlier] == [(0, 2)]
+
+    def test_split_maps_uses_backend_map_ids_so_merged_maps_rejoin(self):
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_trajectory_points_with_map", "get_current_map_id"])
+        # Map 0 was merged into map 2 (its poses now report id 2); map 1 is separate.
+        ids = [2, 2, 1, 1, 2]
+        mapper._slam.get_trajectory_points_with_map.return_value = [
+            (float(i), np.eye(4), map_id) for i, map_id in enumerate(ids)
+        ]
+        mapper._slam.get_current_map_id.return_value = 2
+        mapper._map_starts = [1.5, 3.5]
+        current, earlier = mapper._split_maps(mapper._get_map_trajectory())
+        assert len(current) == 3
+        assert [key for key, _ in earlier] == [1]
+        assert mapper._map_label(len(earlier)).startswith("map #3")
+
+    def test_recovery_replay_fits_inside_relocalization_window(self):
+        mapper = self._mapper()
+        assert mapper._recovery_replay_s() == pytest.approx(2.0)
+        mapper._recently_lost_s = 8.0
+        assert mapper._recovery_replay_s() == pytest.approx(7.0)
+        mapper._recently_lost_s = 30.0
+        assert mapper._recovery_replay_s() == pytest.approx(8.0)
+
+    def test_resolve_recently_lost_prefers_value_reported_by_fork(self, tmp_path):
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_recently_lost_seconds"])
+        mapper._slam.get_recently_lost_seconds.return_value = 8.0
+        assert mapper._resolve_recently_lost(tmp_path / "unused.yaml") == pytest.approx(8.0)
+
+    def test_resolve_recently_lost_old_build_ignores_yaml(self, tmp_path):
+        settings = tmp_path / "orbslam3_mono.yaml"
+        settings.write_text("%YAML:1.0\n---\nSystem.RecentlyLostSeconds: 8.0\n", encoding="utf-8")
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_trajectory_points"])
+        assert mapper._resolve_recently_lost(settings) == pytest.approx(3.0)
+
+    def test_map_merge_updates_map_count(self):
+        mapper = self._mapper()
+        mapper._slam.get_map_count.return_value = 3
+        mapper._check_map_merge()
+        mapper._slam.get_map_count.return_value = 2
+        mapper._check_map_merge()
+        assert mapper._last_map_count == 2
+
+    def test_loss_requests_recovery_and_relocalization_cancels_it(self):
+        mapper = self._mapper()
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "RECENTLY_LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_called_once_with(
+            since=pytest.approx(29.0), max_total=pytest.approx(2.0)
+        )
+        mapper._handle_state_change("RECENTLY_LOST", "OK", ts=31.0)
+        mapper._teleop.cancel_recovery.assert_called_once()
+
+    def test_orbslam2_recovers_in_lost(self):
+        mapper = self._mapper(backend="orbslam2")
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_called_once()
+
+    def test_auto_recover_disabled(self):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(
+            config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"), auto_recover=False
+        )
+        mapper._backend = "orbslam3"
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "RECENTLY_LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_not_called()
+
+
+class TestMapViewHeading:
+    def _pose(self, x, z, yaw_deg):
+        yaw = np.deg2rad(yaw_deg)
+        pose = np.eye(4)
+        # rotation about the camera's y axis: forward (+z) swings toward +x
+        pose[:3, :3] = [[np.cos(yaw), 0, np.sin(yaw)], [0, 1, 0], [-np.sin(yaw), 0, np.cos(yaw)]]
+        pose[0, 3], pose[2, 3] = x, z
+        return pose
+
+    def test_heading_arrow_changes_with_turn_in_place(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        straight = [self._pose(0, 0, 0), self._pose(0, 1, 0)]
+        turned = [self._pose(0, 0, 0), self._pose(0, 1, 90)]
+        a = SlamMapper._render_map_view(straight, frame, "OK", "orbslam3", 640, 480, "map #1")
+        b = SlamMapper._render_map_view(turned, frame, "OK", "orbslam3", 640, 480, "map #1")
+        assert a.shape == b.shape == (480, 640, 3)
+        assert not np.array_equal(a, b)
+
+    def test_forward_motion_is_drawn_upward(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        traj = [self._pose(0, 0, 0), self._pose(0, 1, 0)]
+        out = SlamMapper._render_map_view(traj, frame, "OK", "orbslam3", 640, 480)
+        # Filled current-position dot (bright green) sits near the top, start near the bottom.
+        green = np.argwhere((out[:, :, 1] == 255) & (out[:, :, 0] == 0) & (out[:, :, 2] == 0))
+        assert green[:, 0].min() < 480 // 2
+
+
+class TestMapThumbnails:
+    def test_earlier_maps_are_drawn_bottom_right(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        poses = [np.eye(4), np.eye(4)]
+        poses[1][2, 3] = 1.0
+        bare = SlamMapper._render_map_view(poses, frame, "OK", "orbslam3", 640, 480, "map #2")
+        with_thumbs = SlamMapper._render_map_view(
+            poses, frame, "OK", "orbslam3", 640, 480, "map #2", [(0, poses)]
+        )
+        bottom_right = (slice(480 - 480 // 5 - 8, 480 - 8), slice(640 - 640 // 5 - 8, 640 - 8))
+        assert not np.array_equal(bare[bottom_right], with_thumbs[bottom_right])
+
+
+class TestSlamExposureFlag:
+    def test_default_is_none(self):
+        assert _parse(["slam"]).max_exposure_ms is None
+
+    def test_flag_sets_value(self):
+        assert _parse(["slam", "--max-exposure-ms", "10"]).max_exposure_ms == pytest.approx(10.0)
+
+
+class TestTrajectoryRefresh:
+    def _mapper(self):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(
+            config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"), stream=True
+        )
+        mapper._server = MagicMock()  # streaming active
+        mapper._split_maps = MagicMock(return_value=([np.eye(4)], []))
+        mapper._get_map_trajectory = MagicMock(return_value=[])
+        return mapper
+
+    def test_full_fetch_only_every_nth_frame_while_streaming(self):
+        from lib.map.slam import _TRAJ_REFRESH_FRAMES
+
+        mapper = self._mapper()
+        fetched = []
+        for frame in range(1, 3 * _TRAJ_REFRESH_FRAMES + 1):
+            mapper._frame_idx = frame
+            fetched.append(mapper._view_trajectory(state_changed=False, label="OK")[2])
+        # first frame (empty cache) + every Nth frame
+        expected = [f == 1 or f % _TRAJ_REFRESH_FRAMES == 0 for f in range(1, len(fetched) + 1)]
+        assert fetched == expected
+
+    def test_state_change_always_fetches(self):
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")
+        mapper._frame_idx = 2
+        assert mapper._view_trajectory(state_changed=True, label="RECENTLY_LOST")[2] is True
+
+    def test_live_poses_extend_cached_path_until_next_fetch(self):
+        from lib.map.slam import _TRAJ_REFRESH_FRAMES
+
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")  # fetch: 1 cached pose
+        mapper._live_pose = np.eye(4)
+        mapper._frame_idx = 2
+        traj, _, fetched = mapper._view_trajectory(state_changed=False, label="OK")
+        assert not fetched and len(traj) == 2
+        mapper._frame_idx = 3
+        assert len(mapper._view_trajectory(state_changed=False, label="OK")[0]) == 3
+        mapper._frame_idx = _TRAJ_REFRESH_FRAMES
+        traj, _, fetched = mapper._view_trajectory(state_changed=False, label="OK")
+        assert fetched and len(traj) == 1  # live poses dropped: the fetch includes them
+
+    def test_live_pose_not_added_while_lost(self):
+        mapper = self._mapper()
+        mapper._frame_idx = 1
+        mapper._view_trajectory(state_changed=False, label="OK")
+        mapper._live_pose = np.eye(4)
+        mapper._frame_idx = 2
+        assert len(mapper._view_trajectory(state_changed=False, label="RECENTLY_LOST")[0]) == 1
+
+    def test_without_stream_fetches_only_on_state_change(self):
+        mapper = self._mapper()
+        mapper._server = None
+        for frame in range(1, 11):
+            mapper._frame_idx = frame
+            assert mapper._view_trajectory(state_changed=False, label="OK")[2] is False
+        assert mapper._view_trajectory(state_changed=True, label="LOST")[2] is True
+
+    def test_pose_from_tcw(self):
+        from lib.map.slam import SlamMapper
+
+        assert SlamMapper._pose_from_tcw(np.zeros((4, 4))) is None
+        assert SlamMapper._pose_from_tcw(np.zeros((3, 3))) is None
+        tcw = np.eye(4)
+        tcw[2, 3] = -1.0  # world-to-camera translation; the camera itself sits at z = +1
+        twc = SlamMapper._pose_from_tcw(tcw)
+        assert twc[2, 3] == pytest.approx(1.0)

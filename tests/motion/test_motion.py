@@ -378,3 +378,289 @@ class TestCollisionModelPath:
 
             mock_download.assert_called_once()
             assert config.model_path == fake_default
+
+
+# lib/motor.py — trim-to-motor mapping
+class TestMotorTrimMapping:
+    """
+    InvertedRobot drives the chassis in jetbot's "backward" direction, so
+    jetbot's left_motor is the robot's physical right wheel. Trim names the
+    physical wheels, so it must land on the opposite jetbot motor.
+    """
+
+    def _controller(self, robot_cls):
+        import lib.motor as motor_mod
+
+        with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
+            motor_mod, "InvertedRobot", robot_cls, create=True
+        ):
+            controller = motor_mod.MotorController(left_trim=0.8, right_trim=1.0)
+            controller.open()
+        return controller
+
+    def test_open_swaps_trim_onto_jetbot_motors(self):
+        robot_cls = MagicMock()
+        self._controller(robot_cls)
+        robot_cls.assert_called_once_with(left_motor_alpha=1.0, right_motor_alpha=0.8)
+
+    def test_set_trim_swaps_trim_onto_jetbot_motors(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.set_trim(0.9, 0.7)
+        robot = robot_cls.return_value
+        assert robot.left_motor.alpha == pytest.approx(0.7)
+        assert robot.right_motor.alpha == pytest.approx(0.9)
+
+
+# lib/motion/teleoperation.py — auto-recovery
+class TestRecoveryPlan:
+    def test_segments_merge_held_key_and_cap_each_press_at_key_timeout(self):
+        from lib.motion.teleoperation import _segments_from_events
+
+        # Held "left" (presses every 0.05 s), then one "forward" press, then nothing.
+        events = [(10.00, "left"), (10.05, "left"), (10.10, "left"), (10.50, "forward")]
+        segs = _segments_from_events(events, since=9.0, until=11.0, key_timeout=0.15)
+        assert [a for a, _ in segs] == ["left", "forward"]
+        assert segs[0][1] == pytest.approx(0.05 + 0.05 + 0.15)
+        assert segs[1][1] == pytest.approx(0.15)
+
+    def test_segments_ignore_presses_outside_window(self):
+        from lib.motion.teleoperation import _segments_from_events
+
+        events = [(1.0, "forward"), (5.0, "left")]
+        segs = _segments_from_events(events, since=4.0, until=6.0, key_timeout=0.15)
+        assert segs == [("left", pytest.approx(0.15))]
+
+    def test_reverse_plan_inverts_newest_first_and_caps_total(self):
+        from lib.motion.teleoperation import _reverse_plan
+
+        plan = _reverse_plan([("forward", 1.5), ("left", 1.0)], max_total=2.0)
+        assert plan == [("right", pytest.approx(1.0)), ("backward", pytest.approx(1.0))]
+
+    def test_reverse_plan_skips_stop(self):
+        from lib.motion.teleoperation import _reverse_plan
+
+        assert _reverse_plan([("stop", 0.5), ("left", 0.2)], max_total=2.0) == [
+            ("right", pytest.approx(0.2))
+        ]
+
+
+class TestTeleopRecovery:
+    def _controller(self):
+        from lib.motion.teleoperation import TeleopController
+
+        controller = TeleopController(speed=0.2, turn_gain=0.5)
+        controller._motors = MagicMock()
+        return controller
+
+    def test_record_action_drops_old_history(self):
+        controller = self._controller()
+        controller._record_action("forward", now=100.0)
+        controller._record_action("left", now=106.0)
+        assert list(controller._history) == [(106.0, "left")]
+        assert controller._last_key_ts == 106.0
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_execute_plan_drives_inverse_moves_then_stops(self, _sleep):
+        controller = self._controller()
+        controller._execute_plan([("right", 0.1), ("backward", 0.05)])
+        motors = controller._motors
+        assert motors.turn_right.call_count == 2
+        motors.turn_right.assert_called_with(pytest.approx(0.1))
+        assert motors.backward.call_count == 1
+        motors.stop.assert_called_once()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_cancelled_plan_stops_without_driving(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery()
+        controller._execute_plan([("right", 1.0)])
+        controller._motors.turn_right.assert_not_called()
+        controller._motors.stop.assert_called_once()
+
+    def test_request_recovery_undoes_recent_moves(self):
+        import time as _time
+
+        controller = self._controller()
+        now = _time.time()
+        controller._record_action("left", now=now - 0.6)
+        with patch.object(controller, "_execute_plan") as execute:
+            assert controller.request_recovery(since=now - 1.0)
+            controller._recover_thread.join(timeout=2.0)
+        execute.assert_called_once()
+        plan = execute.call_args[0][0]
+        assert [a for a, _ in plan] == ["right"]
+
+    def test_request_recovery_cancelled_before_operator_releases(self):
+        import time as _time
+
+        controller = self._controller()
+        controller._last_key_ts = _time.time() + 10  # operator still "holding" a key
+        with patch.object(controller, "_execute_plan") as execute:
+            controller.request_recovery(since=0.0)
+            controller.cancel_recovery()
+            controller._recover_thread.join(timeout=2.0)
+        execute.assert_not_called()
+
+
+# lib/camera.py — exposure cap
+class TestCameraExposure:
+    def test_no_cap_keeps_default_pipeline(self):
+        from lib.camera import _exposure_range
+
+        assert _exposure_range(None) == ""
+
+    def test_cap_sets_argus_exposure_range_in_ns(self):
+        from lib.camera import _GST_CSI_PIPELINE, _exposure_range
+
+        prop = _exposure_range(10)
+        assert prop == ' exposuretimerange="13000 10000000"'
+        pipeline = _GST_CSI_PIPELINE.format(w=640, h=480, fps=30, exposure=prop)
+        assert pipeline.startswith(
+            'nvarguscamerasrc sensor-mode=2 exposuretimerange="13000 10000000" ! '
+        )
+
+    def test_cap_below_sensor_minimum_is_clamped(self):
+        from lib.camera import _exposure_range
+
+        assert _exposure_range(0.001) == ' exposuretimerange="13000 13000"'
+
+
+# lib/motor.py — per-wheel speeds (steer / set_speeds)
+class TestMotorWheelSpeeds:
+    def test_physical_speeds_map_to_swapped_negated_jetbot_motors(self):
+        from lib.motor import _to_jetbot_motors
+
+        # Physical left 0.3, right 0.1: jetbot's left_motor is the physical right wheel,
+        # and jetbot "forward" is this chassis' backward.
+        assert _to_jetbot_motors(0.3, 0.1) == (pytest.approx(-0.1), pytest.approx(-0.3))
+
+    def test_forward_matches_inverted_robot_forward(self):
+        from lib.motor import _to_jetbot_motors
+
+        # InvertedRobot.forward(s) is jetbot backward(s): both jetbot motors at -s.
+        assert _to_jetbot_motors(0.2, 0.2) == (pytest.approx(-0.2), pytest.approx(-0.2))
+
+    def _controller(self, robot_cls):
+        import lib.motor as motor_mod
+
+        with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
+            motor_mod, "InvertedRobot", robot_cls, create=True
+        ):
+            controller = motor_mod.MotorController(left_trim=1.0, right_trim=1.0)
+            controller.open()
+        return controller
+
+    def test_set_speeds_goes_through_inverted_robot(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.set_speeds(0.3, 0.1)
+        robot = robot_cls.return_value
+        robot.set_motors.assert_called_once_with(pytest.approx(0.3), pytest.approx(0.1))
+
+    def test_steer_right_drives_left_wheel_faster(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        controller.steer(0.2, 0.1)
+        left, right = robot_cls.return_value.set_motors.call_args[0]
+        assert left == pytest.approx(0.3)
+        assert right == pytest.approx(0.1)
+
+
+# lib/motor.py — commands from several threads must not interleave
+class TestMotorLock:
+    class _SlowRobot:
+        """Fake jetbot Robot: each command writes 'left' then 'right' with a gap between."""
+
+        def __init__(self):
+            self.writes = []
+
+        def _command(self, name):
+            import time as _time
+
+            self.writes.append((name, "left"))
+            _time.sleep(0.001)
+            self.writes.append((name, "right"))
+
+        def forward(self, speed):  # pylint: disable=unused-argument
+            self._command("forward")
+
+        def stop(self):
+            self._command("stop")
+
+    def test_concurrent_commands_write_both_motors_without_interleaving(self):
+        import threading
+
+        from lib.motor import MotorController
+
+        controller = MotorController()
+        controller._dry_run = False
+        controller._robot = robot = self._SlowRobot()
+
+        def spam(method):
+            for _ in range(30):
+                method()
+
+        threads = [
+            threading.Thread(target=spam, args=(lambda: controller.forward(0.2),)),
+            threading.Thread(target=spam, args=(controller.stop,)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        pairs = list(zip(robot.writes[0::2], robot.writes[1::2]))
+        assert len(pairs) == 60
+        assert all(a[0] == b[0] and (a[1], b[1]) == ("left", "right") for a, b in pairs)
+
+    def test_nested_commands_do_not_deadlock(self):
+        import threading
+
+        from lib.motor import MotorController
+
+        controller = MotorController()
+        controller._dry_run = False
+        controller._robot = MagicMock()
+        # close() calls stop(), steer() calls set_speeds(): both re-enter the lock.
+        t = threading.Thread(target=lambda: (controller.steer(0.2, 0.1), controller.close()))
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive()
+
+
+class TestTeleopOrdering:
+    def _controller(self):
+        from lib.motion.teleoperation import TeleopController
+
+        controller = TeleopController(speed=0.2, turn_gain=0.5)
+        controller._motors = MagicMock()
+        return controller
+
+    def test_release_stop_skipped_when_a_newer_key_arrived(self):
+        controller = self._controller()
+        controller._record_action("forward", now=10.0)
+        controller._record_action("forward", now=10.03)
+        controller._release_stop(10.0)  # timer scheduled for the first press
+        controller._motors.stop.assert_not_called()
+
+    def test_release_stop_runs_after_the_last_key(self):
+        controller = self._controller()
+        controller._record_action("forward", now=10.0)
+        controller._release_stop(10.0)
+        controller._motors.stop.assert_called_once()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_operator_takeover_does_not_stop_motors(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery(stop_motors=False)
+        controller._execute_plan([("right", 1.0)])
+        controller._motors.stop.assert_not_called()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_new_recovery_stops_motors_again_by_default(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery(stop_motors=False)
+        with patch.object(controller, "_recovery_worker"):
+            controller.request_recovery(since=0.0)
+            controller._recover_thread.join(timeout=2)
+        assert controller._recover_stop_on_exit is True

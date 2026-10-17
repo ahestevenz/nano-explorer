@@ -31,18 +31,19 @@ Controls (stdin mode):
     q / quit      -> quit
 """
 
+import collections
 import os
 import select
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Deque, List, Optional, Tuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.motor import MotorController
+from lib.motor import MOTOR_LOCK, MotorController
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -61,6 +62,66 @@ _NUMBER_BYTES_TO_READ: int = 3
 # leading \x1b has arrived so far) before giving up and discarding it as stale —
 # covers a lone ESC keypress, or a genuinely dropped byte.
 _PARTIAL_SEQ_TIMEOUT: float = 0.1
+
+# Auto-recovery (used by SLAM when tracking is lost — see TeleopController.request_recovery):
+# replay the operator's most recent moves in reverse so the camera swings back
+# toward the view the map was built from.
+_INVERSE_ACTION = {"forward": "backward", "backward": "forward", "left": "right", "right": "left"}
+# Keypress history kept for recovery; only the last few seconds can ever be replayed.
+_HISTORY_KEEP_S: float = 5.0
+# Default upper bound on how much motion one recovery replays. ORB-SLAM3
+# monocular gives up relocalizing 3 s after tracking is lost by default, so the
+# replay has to fit before that; SLAM passes a longer limit when the backend's
+# window is longer (System.RecentlyLostSeconds).
+_RECOVERY_MAX_S: float = 2.0
+# How long without a keypress before the operator counts as "hands off" and the
+# replay may start — replaying while a key is still held would fight the operator.
+_RECOVERY_IDLE_S: float = 0.3
+# Motor commands are re-sent at this interval during a replay step, the same way
+# a held key re-sends them, so a stray stop from the key-release timer only
+# interrupts a step for one tick.
+_RECOVERY_TICK_S: float = 0.05
+
+
+def _segments_from_events(
+    events: List[Tuple[float, str]], since: float, until: float, key_timeout: float
+) -> List[Tuple[str, float]]:
+    """
+    Turn timestamped keypresses into (action, duration) motion segments, oldest first.
+
+    Each keypress drives the motors until the next keypress or until the
+    key-release timeout fires, whichever comes first — the same rule
+    _run_arrows uses. Consecutive presses of the same key merge into one segment.
+    Only presses inside [since, until] are counted.
+    """
+    inside = [(t, a) for t, a in events if since <= t <= until]
+    segments: List[Tuple[str, float]] = []
+    for i, (t, action) in enumerate(inside):
+        nxt = inside[i + 1][0] if i + 1 < len(inside) else until
+        duration = max(0.0, min(nxt - t, key_timeout, until - t))
+        if segments and segments[-1][0] == action:
+            segments[-1] = (action, segments[-1][1] + duration)
+        else:
+            segments.append((action, duration))
+    return [(a, d) for a, d in segments if d > 0]
+
+
+def _reverse_plan(segments: List[Tuple[str, float]], max_total: float) -> List[Tuple[str, float]]:
+    """
+    Undo plan for motion segments: newest first, each action inverted, and cut
+    off once max_total seconds are planned (keeping the most recent motion,
+    which is what moved the camera off the mapped view).
+    """
+    plan: List[Tuple[str, float]] = []
+    remaining = max_total
+    for action, duration in reversed(segments):
+        inverse = _INVERSE_ACTION.get(action)
+        if inverse is None or remaining <= 0:
+            continue
+        step = min(duration, remaining)
+        plan.append((inverse, step))
+        remaining -= step
+    return plan
 
 
 def _import_keyboard() -> Any:
@@ -213,6 +274,17 @@ class TeleopController(CameraMotionMixIn):
         super().__init__()
         self._config = TeleopConfig(**kwargs)
         self._motors = MotorController()
+        # Operator keypresses (timestamp, action) for auto-recovery. Recovery's own
+        # replayed moves are never recorded, so a replay can't be replayed back.
+        self._history: Deque[Tuple[float, str]] = collections.deque()
+        self._history_lock = threading.Lock()
+        self._last_key_ts = 0.0
+        self._recover_cancel = threading.Event()
+        self._recover_thread: Optional[threading.Thread] = None
+        # Whether a cancelled replay should stop the motors on its way out: yes
+        # when SLAM relocalized, no when the operator took over (their key is
+        # already driving, and a late stop would cancel it).
+        self._recover_stop_on_exit = True
 
     def run(self) -> None:
         if self._config.mode == "auto":
@@ -276,7 +348,9 @@ class TeleopController(CameraMotionMixIn):
             nonlocal stop_timer
             if stop_timer is not None:
                 stop_timer.cancel()
-            stop_timer = threading.Timer(_KEY_TIMEOUT, self._motors.stop)
+            stop_timer = threading.Timer(
+                _KEY_TIMEOUT, self._release_stop, args=(self._last_key_ts,)
+            )
             stop_timer.daemon = True
             stop_timer.start()
 
@@ -304,6 +378,14 @@ class TeleopController(CameraMotionMixIn):
                 if action == "__quit__":
                     _stop.set()
                     break
+                if self.is_recovering():
+                    # Any arrow key hands control straight back to the operator. Wait
+                    # for the replay thread to finish its current step, so its last
+                    # motor command can't land after the operator's.
+                    self.cancel_recovery(stop_motors=False)
+                    self._recover_thread.join(timeout=4 * _RECOVERY_TICK_S)
+                    logger.info("[recover] cancelled — manual control")
+                self._record_action(action)
                 self._apply_action(action)
                 _schedule_stop()
         except Exception as exc:
@@ -423,7 +505,8 @@ class TeleopController(CameraMotionMixIn):
                 self._server.stop()
             logger.info("Teleop stopped.")
 
-    def _apply_action(self, action: str) -> None:
+    def _drive(self, action: str) -> None:
+        """Send the motor command for one action, without logging it."""
         turn_speed = self._config.speed * self._config.turn_gain
         dispatch = {
             "forward": lambda: self._motors.forward(self._config.speed),
@@ -433,6 +516,99 @@ class TeleopController(CameraMotionMixIn):
             "stop": self._motors.stop,
         }
         dispatch.get(action, self._motors.stop)()
+
+    def _release_stop(self, key_ts: float) -> None:
+        """
+        Key-release stop, run by the timer _run_arrows schedules after each key.
+
+        Timer.cancel() can't stop a timer that is already firing, so a stop for
+        an earlier key could otherwise land right after a newer key's command.
+        Skip it if any key arrived after the one it was scheduled for. Checked
+        under MOTOR_LOCK, so a key recorded before its command is applied is
+        always seen.
+        """
+        with MOTOR_LOCK:
+            if self._last_key_ts > key_ts:
+                return
+            self._motors.stop()
+
+    def _record_action(self, action: str, now: Optional[float] = None) -> None:
+        """Remember an operator keypress for auto-recovery, dropping old entries."""
+        now = time.time() if now is None else now
+        with self._history_lock:
+            self._history.append((now, action))
+            while self._history and now - self._history[0][0] > _HISTORY_KEEP_S:
+                self._history.popleft()
+            self._last_key_ts = now
+
+    # Auto-recovery
+    def is_recovering(self) -> bool:
+        return self._recover_thread is not None and self._recover_thread.is_alive()
+
+    def cancel_recovery(self, stop_motors: bool = True) -> None:
+        """
+        Stop a pending or running recovery. stop_motors=False leaves the motors
+        alone on the way out — for when the operator takes over and is already
+        driving.
+        """
+        self._recover_stop_on_exit = stop_motors
+        self._recover_cancel.set()
+
+    def request_recovery(self, since: float, max_total: float = _RECOVERY_MAX_S) -> bool:
+        """
+        Start auto-recovery in the background: wait until the operator releases
+        the keys, then replay their moves since `since` in reverse (newest first,
+        each inverted, at most `max_total` seconds in total), and stop.
+
+        Any arrow key, or cancel_recovery() (e.g. SLAM relocalized), ends it early.
+        Returns False if a recovery is already running.
+        """
+        if self.is_recovering():
+            return False
+        self._recover_stop_on_exit = True
+        self._recover_cancel.clear()
+        self._recover_thread = threading.Thread(
+            target=self._recovery_worker,
+            args=(since, max_total),
+            daemon=True,
+            name="teleop-recover",
+        )
+        self._recover_thread.start()
+        return True
+
+    def _recovery_worker(self, since: float, max_total: float) -> None:
+        while not self._recover_cancel.is_set():
+            if time.time() - self._last_key_ts >= _RECOVERY_IDLE_S:
+                break
+            time.sleep(_RECOVERY_TICK_S)
+        if self._recover_cancel.is_set():
+            return
+
+        with self._history_lock:
+            events = list(self._history)
+            until = self._last_key_ts + _KEY_TIMEOUT
+        plan = _reverse_plan(_segments_from_events(events, since, until, _KEY_TIMEOUT), max_total)
+        if not plan:
+            logger.info("[recover] no recent moves to undo — drive back toward the mapped view")
+            return
+        self._execute_plan(plan)
+
+    def _execute_plan(self, plan: List[Tuple[str, float]]) -> None:
+        try:
+            for action, duration in plan:
+                logger.info(f"[recover] {action:<10} {duration:.2f}s")
+                for _ in range(max(1, round(duration / _RECOVERY_TICK_S))):
+                    if self._recover_cancel.is_set():
+                        return
+                    self._drive(action)
+                    time.sleep(_RECOVERY_TICK_S)
+        finally:
+            if self._recover_stop_on_exit:
+                self._motors.stop()
+
+    def _apply_action(self, action: str) -> None:
+        self._drive(action)
+        turn_speed = self._config.speed * self._config.turn_gain
         # left/right send turn_speed (speed * turn_gain) to the motors, not the raw
         # linear speed — log the value actually applied, not always self._config.speed,
         # so this line can be trusted when debugging speed/turn-gain settings.
