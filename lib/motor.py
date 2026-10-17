@@ -15,8 +15,13 @@ Speed values are floats in [0.0, 1.0].
 
 import functools
 import threading
+from typing import Tuple
 
+import yaml
 from loguru import logger
+from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
+
+from lib.settings import NanoSettings, ensure_user_config
 
 # One lock for every motor command in the process. A single command writes both
 # motors, and each motor update in jetbot is several separate I2C writes (speed,
@@ -99,14 +104,6 @@ except ImportError:
         "Install with: pip3 install jetbot  "
         "(or follow the Waveshare JetBot setup guide)"
     )
-
-
-from typing import Tuple
-
-import yaml
-from pydantic import BaseModel, Field  # pylint: disable=no-name-in-module
-
-from lib.settings import NanoSettings, ensure_user_config
 
 
 def _load_trim() -> Tuple[float, float]:
