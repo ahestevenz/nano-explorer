@@ -43,7 +43,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, validator
 
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.motor import MotorController
+from lib.motor import MOTOR_LOCK, MotorController
 
 _ARROW_MAP = {
     b"\x1b[A": "forward",  # Up
@@ -281,6 +281,10 @@ class TeleopController(CameraMotionMixIn):
         self._last_key_ts = 0.0
         self._recover_cancel = threading.Event()
         self._recover_thread: Optional[threading.Thread] = None
+        # Whether a cancelled replay should stop the motors on its way out: yes
+        # when SLAM relocalized, no when the operator took over (their key is
+        # already driving, and a late stop would cancel it).
+        self._recover_stop_on_exit = True
 
     def run(self) -> None:
         if self._config.mode == "auto":
@@ -344,7 +348,9 @@ class TeleopController(CameraMotionMixIn):
             nonlocal stop_timer
             if stop_timer is not None:
                 stop_timer.cancel()
-            stop_timer = threading.Timer(_KEY_TIMEOUT, self._motors.stop)
+            stop_timer = threading.Timer(
+                _KEY_TIMEOUT, self._release_stop, args=(self._last_key_ts,)
+            )
             stop_timer.daemon = True
             stop_timer.start()
 
@@ -373,8 +379,11 @@ class TeleopController(CameraMotionMixIn):
                     _stop.set()
                     break
                 if self.is_recovering():
-                    # Any arrow key hands control straight back to the operator.
-                    self.cancel_recovery()
+                    # Any arrow key hands control straight back to the operator. Wait
+                    # for the replay thread to finish its current step, so its last
+                    # motor command can't land after the operator's.
+                    self.cancel_recovery(stop_motors=False)
+                    self._recover_thread.join(timeout=4 * _RECOVERY_TICK_S)
                     logger.info("[recover] cancelled — manual control")
                 self._record_action(action)
                 self._apply_action(action)
@@ -508,6 +517,21 @@ class TeleopController(CameraMotionMixIn):
         }
         dispatch.get(action, self._motors.stop)()
 
+    def _release_stop(self, key_ts: float) -> None:
+        """
+        Key-release stop, run by the timer _run_arrows schedules after each key.
+
+        Timer.cancel() can't stop a timer that is already firing, so a stop for
+        an earlier key could otherwise land right after a newer key's command.
+        Skip it if any key arrived after the one it was scheduled for. Checked
+        under MOTOR_LOCK, so a key recorded before its command is applied is
+        always seen.
+        """
+        with MOTOR_LOCK:
+            if self._last_key_ts > key_ts:
+                return
+            self._motors.stop()
+
     def _record_action(self, action: str, now: Optional[float] = None) -> None:
         """Remember an operator keypress for auto-recovery, dropping old entries."""
         now = time.time() if now is None else now
@@ -521,8 +545,13 @@ class TeleopController(CameraMotionMixIn):
     def is_recovering(self) -> bool:
         return self._recover_thread is not None and self._recover_thread.is_alive()
 
-    def cancel_recovery(self) -> None:
-        """Stop a pending or running recovery; the replay worker stops the motors."""
+    def cancel_recovery(self, stop_motors: bool = True) -> None:
+        """
+        Stop a pending or running recovery. stop_motors=False leaves the motors
+        alone on the way out — for when the operator takes over and is already
+        driving.
+        """
+        self._recover_stop_on_exit = stop_motors
         self._recover_cancel.set()
 
     def request_recovery(self, since: float, max_total: float = _RECOVERY_MAX_S) -> bool:
@@ -536,6 +565,7 @@ class TeleopController(CameraMotionMixIn):
         """
         if self.is_recovering():
             return False
+        self._recover_stop_on_exit = True
         self._recover_cancel.clear()
         self._recover_thread = threading.Thread(
             target=self._recovery_worker,
@@ -573,7 +603,8 @@ class TeleopController(CameraMotionMixIn):
                     self._drive(action)
                     time.sleep(_RECOVERY_TICK_S)
         finally:
-            self._motors.stop()
+            if self._recover_stop_on_exit:
+                self._motors.stop()
 
     def _apply_action(self, action: str) -> None:
         self._drive(action)

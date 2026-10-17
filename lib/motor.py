@@ -13,7 +13,31 @@ line follower, etc.) decoupled from the JetBot API directly.
 Speed values are floats in [0.0, 1.0].
 """
 
+import functools
+import threading
+
 from loguru import logger
+
+# One lock for every motor command in the process. A single command writes both
+# motors, and each motor update in jetbot is several separate I2C writes (speed,
+# direction, two PWM pins), so two threads sending commands at once (teleop,
+# the key-release stop timer, auto-recovery) could interleave and leave one
+# wheel on the old command: the robot turns or circles when told to go straight.
+# Module-level rather than per instance because jetbot's Robot is a singleton —
+# every MotorController drives the same board. Re-entrant because close() calls
+# stop() and steer() calls set_speeds().
+MOTOR_LOCK = threading.RLock()
+
+
+def _locked(method):
+    """Run a MotorController method under MOTOR_LOCK, so its motor writes are never interleaved."""
+
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        with MOTOR_LOCK:
+            return method(*args, **kwargs)
+
+    return wrapper
 
 
 def _to_jetbot_motors(left: float, right: float) -> tuple:
@@ -138,6 +162,7 @@ class MotorController:
         self._left_trim = default_left if left_trim is None else left_trim
         self._right_trim = default_right if right_trim is None else right_trim
 
+    @_locked
     def open(self) -> None:
         """Initialise the JetBot Robot instance."""
         if self._dry_run:
@@ -152,6 +177,7 @@ class MotorController:
             f"trim: left={self._left_trim:.3f}  right={self._right_trim:.3f}"
         )
 
+    @_locked
     def set_trim(self, left_trim: float, right_trim: float) -> None:
         """Update per-wheel power trim live — takes effect on the next motor command."""
         self._left_trim = left_trim
@@ -164,6 +190,7 @@ class MotorController:
             self._robot.left_motor.alpha = right_trim
             self._robot.right_motor.alpha = left_trim
 
+    @_locked
     def close(self) -> None:
         """Stop motors and release the Robot instance."""
         self.stop()
@@ -177,6 +204,7 @@ class MotorController:
     def __exit__(self, *_):
         self.close()
 
+    @_locked
     def set_speeds(self, left: float, right: float) -> None:
         """
         Set individual wheel speeds.
@@ -193,6 +221,7 @@ class MotorController:
         # left_motor/right_motor directly drove this chassis backward.
         self._robot.set_motors(speeds.left, speeds.right)
 
+    @_locked
     def stop(self) -> None:
         if self._dry_run:
             logger.debug("DRY-RUN: stop()")
@@ -200,30 +229,35 @@ class MotorController:
         if self._robot:
             self._robot.stop()
 
+    @_locked
     def forward(self, speed: float = 0.3) -> None:
         if self._dry_run:
             logger.debug(f"DRY-RUN: forward({speed:.2f})")
             return
         self._robot.forward(speed=speed)
 
+    @_locked
     def backward(self, speed: float = 0.3) -> None:
         if self._dry_run:
             logger.debug(f"DRY-RUN: backward({speed:.2f})")
             return
         self._robot.backward(speed=speed)
 
+    @_locked
     def turn_left(self, speed: float = 0.3) -> None:
         if self._dry_run:
             logger.debug(f"DRY-RUN: turn_left({speed:.2f})")
             return
         self._robot.left(speed=speed)
 
+    @_locked
     def turn_right(self, speed: float = 0.3) -> None:
         if self._dry_run:
             logger.debug(f"DRY-RUN: turn_right({speed:.2f})")
             return
         self._robot.right(speed=speed)
 
+    @_locked
     def steer(self, speed: float, steering: float) -> None:
         """
         Differential steering helper.

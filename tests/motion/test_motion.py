@@ -565,3 +565,102 @@ class TestMotorWheelSpeeds:
         left, right = robot_cls.return_value.set_motors.call_args[0]
         assert left == pytest.approx(0.3)
         assert right == pytest.approx(0.1)
+
+
+# lib/motor.py — commands from several threads must not interleave
+class TestMotorLock:
+    class _SlowRobot:
+        """Fake jetbot Robot: each command writes 'left' then 'right' with a gap between."""
+
+        def __init__(self):
+            self.writes = []
+
+        def _command(self, name):
+            import time as _time
+
+            self.writes.append((name, "left"))
+            _time.sleep(0.001)
+            self.writes.append((name, "right"))
+
+        def forward(self, speed):  # pylint: disable=unused-argument
+            self._command("forward")
+
+        def stop(self):
+            self._command("stop")
+
+    def test_concurrent_commands_write_both_motors_without_interleaving(self):
+        import threading
+
+        from lib.motor import MotorController
+
+        controller = MotorController()
+        controller._dry_run = False
+        controller._robot = robot = self._SlowRobot()
+
+        def spam(method):
+            for _ in range(30):
+                method()
+
+        threads = [
+            threading.Thread(target=spam, args=(lambda: controller.forward(0.2),)),
+            threading.Thread(target=spam, args=(controller.stop,)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        pairs = list(zip(robot.writes[0::2], robot.writes[1::2]))
+        assert len(pairs) == 60
+        assert all(a[0] == b[0] and (a[1], b[1]) == ("left", "right") for a, b in pairs)
+
+    def test_nested_commands_do_not_deadlock(self):
+        import threading
+
+        from lib.motor import MotorController
+
+        controller = MotorController()
+        controller._dry_run = False
+        controller._robot = MagicMock()
+        # close() calls stop(), steer() calls set_speeds(): both re-enter the lock.
+        t = threading.Thread(target=lambda: (controller.steer(0.2, 0.1), controller.close()))
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive()
+
+
+class TestTeleopOrdering:
+    def _controller(self):
+        from lib.motion.teleoperation import TeleopController
+
+        controller = TeleopController(speed=0.2, turn_gain=0.5)
+        controller._motors = MagicMock()
+        return controller
+
+    def test_release_stop_skipped_when_a_newer_key_arrived(self):
+        controller = self._controller()
+        controller._record_action("forward", now=10.0)
+        controller._record_action("forward", now=10.03)
+        controller._release_stop(10.0)  # timer scheduled for the first press
+        controller._motors.stop.assert_not_called()
+
+    def test_release_stop_runs_after_the_last_key(self):
+        controller = self._controller()
+        controller._record_action("forward", now=10.0)
+        controller._release_stop(10.0)
+        controller._motors.stop.assert_called_once()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_operator_takeover_does_not_stop_motors(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery(stop_motors=False)
+        controller._execute_plan([("right", 1.0)])
+        controller._motors.stop.assert_not_called()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_new_recovery_stops_motors_again_by_default(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery(stop_motors=False)
+        with patch.object(controller, "_recovery_worker"):
+            controller.request_recovery(since=0.0)
+            controller._recover_thread.join(timeout=2)
+        assert controller._recover_stop_on_exit is True
