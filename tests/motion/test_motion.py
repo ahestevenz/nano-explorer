@@ -501,3 +501,26 @@ class TestTeleopRecovery:
             controller.cancel_recovery()
             controller._recover_thread.join(timeout=2.0)
         execute.assert_not_called()
+
+
+# lib/camera.py — exposure cap
+class TestCameraExposure:
+    def test_no_cap_keeps_default_pipeline(self):
+        from lib.camera import _exposure_range
+
+        assert _exposure_range(None) == ""
+
+    def test_cap_sets_argus_exposure_range_in_ns(self):
+        from lib.camera import _GST_CSI_PIPELINE, _exposure_range
+
+        prop = _exposure_range(10)
+        assert prop == ' exposuretimerange="13000 10000000"'
+        pipeline = _GST_CSI_PIPELINE.format(w=640, h=480, fps=30, exposure=prop)
+        assert pipeline.startswith(
+            'nvarguscamerasrc sensor-mode=2 exposuretimerange="13000 10000000" ! '
+        )
+
+    def test_cap_below_sensor_minimum_is_clamped(self):
+        from lib.camera import _exposure_range
+
+        assert _exposure_range(0.001) == ' exposuretimerange="13000 13000"'

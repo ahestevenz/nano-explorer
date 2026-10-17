@@ -766,19 +766,67 @@ class TestMapSegments:
         assert not mapper._map_starts
         assert mapper._map_label() == "map #1"
 
-    def test_current_map_poses_keeps_only_poses_after_last_restart(self):
+    def test_split_maps_by_restart_time_without_map_ids(self):
         mapper = self._mapper()
-        poses = [np.eye(4) * k for k in range(1, 5)]
-        stamped = list(zip([1.0, 2.0, 6.0, 7.0], poses))
-        assert len(mapper._current_map_poses(stamped)) == 4
+        mapper._slam = MagicMock(spec=["get_map_count", "get_trajectory_points"])
+        tcws = [np.eye(4) for _ in range(4)]
+        mapper._slam.get_trajectory_points.return_value = list(zip([1.0, 2.0, 6.0, 7.0], tcws))
         mapper._map_starts = [5.0]
-        assert mapper._current_map_poses(stamped) == poses[2:]
+        current, earlier = mapper._split_maps(mapper._get_map_trajectory())
+        assert len(current) == 2
+        assert [(key, len(poses)) for key, poses in earlier] == [(0, 2)]
+
+    def test_split_maps_uses_backend_map_ids_so_merged_maps_rejoin(self):
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_trajectory_points_with_map", "get_current_map_id"])
+        # Map 0 was merged into map 2 (its poses now report id 2); map 1 is separate.
+        ids = [2, 2, 1, 1, 2]
+        mapper._slam.get_trajectory_points_with_map.return_value = [
+            (float(i), np.eye(4), map_id) for i, map_id in enumerate(ids)
+        ]
+        mapper._slam.get_current_map_id.return_value = 2
+        mapper._map_starts = [1.5, 3.5]
+        current, earlier = mapper._split_maps(mapper._get_map_trajectory())
+        assert len(current) == 3
+        assert [key for key, _ in earlier] == [1]
+        assert mapper._map_label(len(earlier)).startswith("map #3")
+
+    def test_recovery_replay_fits_inside_relocalization_window(self):
+        mapper = self._mapper()
+        assert mapper._recovery_replay_s() == pytest.approx(2.0)
+        mapper._recently_lost_s = 8.0
+        assert mapper._recovery_replay_s() == pytest.approx(7.0)
+        mapper._recently_lost_s = 30.0
+        assert mapper._recovery_replay_s() == pytest.approx(8.0)
+
+    def test_resolve_recently_lost_prefers_value_reported_by_fork(self, tmp_path):
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_recently_lost_seconds"])
+        mapper._slam.get_recently_lost_seconds.return_value = 8.0
+        assert mapper._resolve_recently_lost(tmp_path / "unused.yaml") == pytest.approx(8.0)
+
+    def test_resolve_recently_lost_old_build_ignores_yaml(self, tmp_path):
+        settings = tmp_path / "orbslam3_mono.yaml"
+        settings.write_text("%YAML:1.0\n---\nSystem.RecentlyLostSeconds: 8.0\n", encoding="utf-8")
+        mapper = self._mapper()
+        mapper._slam = MagicMock(spec=["get_trajectory_points"])
+        assert mapper._resolve_recently_lost(settings) == pytest.approx(3.0)
+
+    def test_map_merge_updates_map_count(self):
+        mapper = self._mapper()
+        mapper._slam.get_map_count.return_value = 3
+        mapper._check_map_merge()
+        mapper._slam.get_map_count.return_value = 2
+        mapper._check_map_merge()
+        assert mapper._last_map_count == 2
 
     def test_loss_requests_recovery_and_relocalization_cancels_it(self):
         mapper = self._mapper()
         mapper._teleop = MagicMock()
         mapper._handle_state_change("OK", "RECENTLY_LOST", ts=30.0)
-        mapper._teleop.request_recovery.assert_called_once_with(since=pytest.approx(29.0))
+        mapper._teleop.request_recovery.assert_called_once_with(
+            since=pytest.approx(29.0), max_total=pytest.approx(2.0)
+        )
         mapper._handle_state_change("RECENTLY_LOST", "OK", ts=31.0)
         mapper._teleop.cancel_recovery.assert_called_once()
 
@@ -829,3 +877,26 @@ class TestMapViewHeading:
         # Filled current-position dot (bright green) sits near the top, start near the bottom.
         green = np.argwhere((out[:, :, 1] == 255) & (out[:, :, 0] == 0) & (out[:, :, 2] == 0))
         assert green[:, 0].min() < 480 // 2
+
+
+class TestMapThumbnails:
+    def test_earlier_maps_are_drawn_bottom_right(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        poses = [np.eye(4), np.eye(4)]
+        poses[1][2, 3] = 1.0
+        bare = SlamMapper._render_map_view(poses, frame, "OK", "orbslam3", 640, 480, "map #2")
+        with_thumbs = SlamMapper._render_map_view(
+            poses, frame, "OK", "orbslam3", 640, 480, "map #2", [(0, poses)]
+        )
+        bottom_right = (slice(480 - 480 // 5 - 8, 480 - 8), slice(640 - 640 // 5 - 8, 640 - 8))
+        assert not np.array_equal(bare[bottom_right], with_thumbs[bottom_right])
+
+
+class TestSlamExposureFlag:
+    def test_default_is_none(self):
+        assert _parse(["slam"]).max_exposure_ms is None
+
+    def test_flag_sets_value(self):
+        assert _parse(["slam", "--max-exposure-ms", "10"]).max_exposure_ms == pytest.approx(10.0)
