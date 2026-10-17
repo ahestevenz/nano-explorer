@@ -116,6 +116,15 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         default=True,
         help="Don't reverse your last moves automatically when tracking is lost",
     )
+    p_slam.add_argument(
+        "--max-exposure-ms",
+        type=float,
+        default=None,
+        dest="max_exposure_ms",
+        metavar="MS",
+        help="Cap the camera's auto-exposure time to reduce motion blur, e.g. 10 "
+        "(default: camera's own range). Needs good light: frames get darker and noisier",
+    )
     p_slam.set_defaults(func=_run_slam)
 
 

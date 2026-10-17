@@ -54,9 +54,9 @@ class CameraMotionMixIn:
         ip = get_wifi_ip()
         self._nano_ip = ip if ip is not None else "<nano-ip>"
 
-    def _open_camera(self) -> Camera:
-        """Open and return the shared camera instance."""
-        cam = Camera()
+    def _open_camera(self, **camera_kwargs: Any) -> Camera:
+        """Open and return the shared camera instance (camera_kwargs: CameraConfig fields)."""
+        cam = Camera(**camera_kwargs)
         cam.open()
         return cam
 

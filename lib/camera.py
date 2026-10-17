@@ -17,6 +17,7 @@ Usage:
 """
 
 import threading
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -27,13 +28,25 @@ from lib.network import get_wifi_ip
 
 # GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
 _GST_CSI_PIPELINE = (
-    "nvarguscamerasrc sensor-mode=2 ! "
+    "nvarguscamerasrc sensor-mode=2{exposure} ! "
     "video/x-raw(memory:NVMM),width=1920,height=1080,framerate={fps}/1 ! "  # sensor native
     "nvvidconv flip-method=0 ! "
     "video/x-raw,width={w},height={h},format=BGRx ! "  # scale here
     "videoconvert ! "
     "video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
 )
+
+
+# Shortest exposure the IMX219 sensor modes accept, in ns (from the Argus mode list).
+_MIN_EXPOSURE_NS = 13000
+
+
+def _exposure_range(exposure_max_ms: Optional[float]) -> str:
+    """nvarguscamerasrc exposuretimerange property (ns), or '' for Argus' default range."""
+    if exposure_max_ms is None:
+        return ""
+    max_ns = max(_MIN_EXPOSURE_NS, int(exposure_max_ms * 1e6))
+    return f' exposuretimerange="{_MIN_EXPOSURE_NS} {max_ns}"'
 
 
 class FrameBuffer:
@@ -149,6 +162,10 @@ class CameraConfig(BaseModel):
         fps:       Target frames per second.
         source:    "csi" for the CSI ribbon camera, "usb" for a USB webcam.
         device_id: V4L2 device index for USB cameras (ignored for CSI).
+        exposure_max_ms: Longest exposure auto-exposure may pick, in ms (CSI only).
+                   None keeps Argus' own range (up to ~680 ms). Capping it trades
+                   blur for noise: auto-exposure raises gain instead, which ORB
+                   copes with better than motion blur.
     """
 
     width: int = Field(640, gt=0)
@@ -156,6 +173,7 @@ class CameraConfig(BaseModel):
     fps: int = Field(30, gt=0)
     source: str = "csi"
     device_id: int = Field(0, ge=0)
+    exposure_max_ms: Optional[float] = Field(None, gt=0)
 
     @validator("source")
     def source_must_be_valid(cls, v):  # pylint: disable=no-self-argument
@@ -179,7 +197,10 @@ class Camera:
 
         if self._config.source == "csi":
             pipeline = _GST_CSI_PIPELINE.format(
-                w=self._config.width, h=self._config.height, fps=self._config.fps
+                w=self._config.width,
+                h=self._config.height,
+                fps=self._config.fps,
+                exposure=_exposure_range(self._config.exposure_max_ms),
             )
             logger.info("Opening CSI camera via GStreamer pipeline")
             self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
