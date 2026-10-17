@@ -50,6 +50,7 @@ class CameraMotionMixIn:
 
     def __init__(self) -> None:
         self._server = None
+        self._teleop = None  # TeleopController started by _start_teleop_thread, if any
         ip = get_wifi_ip()
         self._nano_ip = ip if ip is not None else "<nano-ip>"
 
@@ -177,6 +178,7 @@ class CameraMotionMixIn:
         from lib.motion.teleoperation import TeleopController
 
         controller = TeleopController(speed=speed, turn_gain=turn_gain)
+        self._teleop = controller
         t = threading.Thread(
             target=controller._run_arrows,
             kwargs={"stop_event": stop_event},

@@ -17,10 +17,11 @@ vocabulary path lives inside that same file, under the "Vocabulary" key.
 All heavy imports are deferred to run() to avoid SIGILL on startup.
 """
 
+import bisect
 import contextlib
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -63,6 +64,25 @@ _STALL_WARN_FRAMES = 150
 _VIZ_MAX_FEATURES = 500
 _VIZ_MATCH_RATIO = 0.75
 
+# States in which the backend is still working inside a map (tracking it, or
+# trying to relocalize in it), and states that mean the map was abandoned and a
+# new one has to be initialized. A move from the first set to the second is a
+# map restart: ORB-SLAM3 either stored the map and started a new one, or reset
+# it, and in both cases the new map has its own origin, heading and scale.
+_IN_MAP_LABELS = {"OK", "OK_KLT", "RECENTLY_LOST", "LOST"}
+_RESTART_LABELS = {"NOT_INIT", "NO_IMAGES"}
+
+# The state in which each backend is still relocalizing against the current map —
+# the window auto-recovery has to work in. ORB-SLAM2 relocalizes in LOST
+# indefinitely; ORB-SLAM3 monocular gives up after 3 s (Tracking.cc).
+_RELOCALIZING_LABEL = {"orbslam2": "LOST", "orbslam3": "RECENTLY_LOST"}
+# How far before the loss to start undoing moves: the motion that took the
+# camera off the mapped view happened just before tracking reported it.
+_RECOVERY_LOOKBACK_S = 1.0
+
+# Map view: heading arrow length in pixels.
+_HEADING_ARROW_PX = 30
+
 
 class SlamConfig(BaseModel):
     """
@@ -77,6 +97,9 @@ class SlamConfig(BaseModel):
         visualize:    Replace the stream's map view with a debug view: trajectory
                        map + ORB keypoints on top, frame-to-frame matches below
                        (green=raw, blue=surviving RANSAC).
+        auto_recover: When tracking is lost, reverse the operator's last moves
+                       (after they release the keys) to get back to the mapped
+                       view before the backend gives up on the map.
     """
 
     config_path: Path = user_config_path("models/slam.yaml")
@@ -87,6 +110,7 @@ class SlamConfig(BaseModel):
     speed: float = Field(0.2, ge=0.0, le=1.0)
     turn_gain: float = Field(0.5, ge=0.0, le=1.0)
     visualize: bool = False
+    auto_recover: bool = True
 
     @validator("config_path", always=True)
     def config_must_exist(cls, v: Path) -> Path:  # pylint: disable=no-self-argument
@@ -119,6 +143,10 @@ class SlamMapper(CameraMotionMixIn):
         self._viz_prev_frame = None
         self._viz_prev_kps = None
         self._viz_prev_desc = None
+        # Timestamps at which the backend abandoned a map and had to start a new
+        # one (see _IN_MAP_LABELS / _RESTART_LABELS). Poses tracked after the
+        # latest entry belong to the current map.
+        self._map_starts: List[float] = []
 
     def _load(self) -> None:
         import yaml
@@ -329,6 +357,86 @@ class SlamMapper(CameraMotionMixIn):
             return self._get_trajectory_orbslam3()
         return self._get_trajectory_orbslam2()
 
+    def _get_stamped_trajectory(self) -> List[Tuple[float, np.ndarray]]:
+        """
+        (timestamp, 4x4 camera-to-world pose) per tracked frame, across every map
+        the backend has built. The timestamps are the ones run() passed in, so
+        _current_map_poses() can tell which map each pose belongs to.
+        """
+        try:
+            raw = self._slam.get_trajectory_points()
+            if self._backend == "orbslam3":
+                return [
+                    (float(t), np.linalg.inv(np.asarray(tcw, dtype=np.float64))) for t, tcw in raw
+                ]
+            stamped = []
+            for r in raw:
+                pose = np.eye(4)
+                pose[:3, :4] = np.asarray(r[1:], dtype=np.float64).reshape(3, 4)
+                stamped.append((float(r[0]), pose))
+            return stamped
+        except Exception:  # pylint: disable=broad-except
+            return []
+
+    def _current_map_poses(self, stamped: List[Tuple[float, np.ndarray]]) -> list:
+        """
+        Poses of the current map only. Each map has its own origin, heading and
+        scale, so poses from earlier maps can't be drawn in the same axes —
+        doing that made every map look like a straight line from (0, 0).
+        """
+        if not self._map_starts:
+            return [pose for _, pose in stamped]
+        start = self._map_starts[-1]
+        times = [t for t, _ in stamped]
+        return [pose for _, pose in stamped[bisect.bisect_right(times, start) :]]
+
+    def _map_label(self) -> str:
+        """Current map number for the stream overlay and logs."""
+        n = len(self._map_starts)
+        if n == 0:
+            return "map #1"
+        hidden = "1 earlier map" if n == 1 else f"{n} earlier maps"
+        return f"map #{n + 1} · {hidden} not shown"
+
+    def _backend_map_count(self) -> Optional[int]:
+        try:
+            return int(self._slam.get_map_count()) if hasattr(self._slam, "get_map_count") else None
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    def _handle_state_change(self, prev: Optional[str], label: str, ts: float) -> None:
+        """
+        React to a tracking-state transition: record map restarts and start or
+        stop auto-recovery.
+        """
+        backend_label = _BACKEND_LABELS[self._backend]
+
+        if prev in _IN_MAP_LABELS and label in _RESTART_LABELS:
+            self._map_starts.append(ts)
+            count = self._backend_map_count()
+            atlas = f"  (backend holds {count} map(s))" if count is not None else ""
+            logger.warning(
+                f"{backend_label} abandoned the map — starting map #{len(self._map_starts) + 1}. "
+                f"Its coordinates restart at (0, 0) facing forward; the old map is not "
+                f"connected to it unless the robot revisits a mapped place.{atlas}"
+            )
+
+        teleop = getattr(self, "_teleop", None)
+        relocalizing = _RELOCALIZING_LABEL.get(self._backend)
+        if teleop is None or not self._config.auto_recover:
+            return
+        if label == relocalizing and prev not in (relocalizing, None):
+            teleop.request_recovery(since=ts - _RECOVERY_LOOKBACK_S)
+            logger.warning(
+                f"{backend_label} lost tracking — release the keys and auto-recovery will "
+                "reverse your last moves to find the mapped view again (any arrow key takes "
+                "over). Tip: turn in short taps and drive forward between them."
+            )
+        elif prev == relocalizing and label != relocalizing:
+            teleop.cancel_recovery()
+            if label in ("OK", "OK_KLT"):
+                logger.success(f"{backend_label} relocalized in map #{len(self._map_starts) + 1}")
+
     def _get_trajectory_orbslam2(self) -> list:
         # get_trajectory_points() (jskinn/ORB_SLAM2-PythonBindings, src/ORBSlamPython.cpp)
         # returns one 13-element tuple per processed frame:
@@ -422,17 +530,24 @@ class SlamMapper(CameraMotionMixIn):
                 # not free, and it grows as the map does. Only pay for it on frames where
                 # it's actually used (a state change, or an active stream), not every frame.
                 state_changed = label != self._last_state_label
-                need_traj = state_changed or (self._config.stream and self._server is not None)
-                traj = self._get_trajectory() if need_traj else []
-
                 if state_changed:
                     logger.info(
                         f"{backend_label} state changed: {self._last_state_label} -> {label}  "
-                        f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s)"
+                        f"(frame={self._frame_idx}  t={ts - self._run_start_ts:.1f}s  "
+                        f"map #{len(self._map_starts) + 1})"
                     )
+                    self._handle_state_change(self._last_state_label, label, ts)
                     self._last_state_label = label
 
-                traj_info = f"  poses={len(traj)}{self._last_pose_xz(traj)}" if need_traj else ""
+                need_traj = state_changed or (self._config.stream and self._server is not None)
+                traj = self._current_map_poses(self._get_stamped_trajectory()) if need_traj else []
+
+                traj_info = (
+                    f"  map=#{len(self._map_starts) + 1}  poses={len(traj)}"
+                    f"{self._last_pose_xz(traj)}"
+                    if need_traj
+                    else ""
+                )
                 need_diag = state_changed or self._frame_idx % _DIAG_INTERVAL == 0
 
                 # opt(lazy=True) defers evaluating every arg (incl. calling
@@ -491,10 +606,17 @@ class SlamMapper(CameraMotionMixIn):
                             self._backend,
                             w * scale,
                             h * scale,
+                            self._map_label(),
                         )
                     else:
                         view = self._render_map_view(
-                            traj, frame, label, self._backend, w * scale, h * scale
+                            traj,
+                            frame,
+                            label,
+                            self._backend,
+                            w * scale,
+                            h * scale,
+                            self._map_label(),
                         )
                     self._push_frame(view)
 
@@ -502,6 +624,8 @@ class SlamMapper(CameraMotionMixIn):
             pass
         finally:
             _stop.set()
+            if getattr(self, "_teleop", None) is not None:
+                self._teleop.cancel_recovery()
             if self._slam is not None:
                 with contextlib.suppress(Exception):
                     self._slam.shutdown()
@@ -525,12 +649,19 @@ class SlamMapper(CameraMotionMixIn):
         backend: str,
         canvas_w: int,
         canvas_h: int,
+        map_label: str = "",
     ) -> np.ndarray:
         """
         Top-down trajectory map (main) with live camera PiP in the top-right corner.
 
         Canvas matches the camera frame dimensions so the stream size is consistent.
-        traj: list of 4x4 SE3 numpy arrays from get_trajectory_points().
+        traj: 4x4 camera-to-world poses of the current map, oldest first.
+
+        Seen from above with the map's initial forward direction (+z) pointing up
+        and +x to the right. A hollow circle marks where the map started, the
+        filled circle is the current position, and the arrow is the camera's
+        current heading, so a turn in place is visible even though the
+        position doesn't change.
         """
         canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
 
@@ -546,12 +677,24 @@ class SlamMapper(CameraMotionMixIn):
                 )
                 x_min, z_min = positions[:, 0].min(), positions[:, 1].min()
                 pts = [
-                    (int((x - x_min) * scale + pad), int((z - z_min) * scale + pad))
+                    (int((x - x_min) * scale + pad), int(canvas_h - pad - (z - z_min) * scale))
                     for x, z in positions
                 ]
                 for i in range(1, len(pts)):
                     cv2.line(canvas, pts[i - 1], pts[i], (0, 180, 0), 1)
+                cv2.circle(canvas, pts[0], 5, (0, 180, 0), 1)
                 cv2.circle(canvas, pts[-1], 5, (0, 255, 0), -1)
+
+                # Heading: the camera's optical axis (+z in the camera frame) is the
+                # third column of the camera-to-world rotation; drop its height.
+                fwd = np.asarray(traj[-1], dtype=np.float64)[:3, 2]
+                norm = float(np.hypot(fwd[0], fwd[2]))
+                if norm > 1e-6:
+                    tip = (
+                        int(pts[-1][0] + _HEADING_ARROW_PX * fwd[0] / norm),
+                        int(pts[-1][1] - _HEADING_ARROW_PX * fwd[2] / norm),
+                    )
+                    cv2.arrowedLine(canvas, pts[-1], tip, (0, 255, 255), 2, cv2.LINE_AA, 0, 0.3)
             except Exception as e:  # pylint: disable=broad-except
                 # Plotting is best-effort and must never take the stream down, but a
                 # silent `pass` here is exactly what hid the pose-shape bug for two
@@ -569,6 +712,17 @@ class SlamMapper(CameraMotionMixIn):
             2,
             cv2.LINE_AA,
         )
+        if map_label:
+            cv2.putText(
+                canvas,
+                map_label,
+                (10, 50),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (200, 200, 200),
+                1,
+                cv2.LINE_AA,
+            )
         cv2.putText(
             canvas,
             "TOP-DOWN MAP",
@@ -691,6 +845,7 @@ class SlamMapper(CameraMotionMixIn):
         backend: str,
         canvas_w: int,
         canvas_h: int,
+        map_label: str = "",
     ) -> np.ndarray:
         """
         Debug view for --visualize:
@@ -699,7 +854,7 @@ class SlamMapper(CameraMotionMixIn):
         """
         h, w = frame.shape[:2]
 
-        map_panel = SlamMapper._render_map_view(traj, frame, state_label, backend, w, h)
+        map_panel = SlamMapper._render_map_view(traj, frame, state_label, backend, w, h, map_label)
         kp_panel = SlamMapper._render_features_panel(frame, keypoints)
         match_panel = SlamMapper._render_matches_panel(
             prev_frame, prev_kps, frame, keypoints, matches, inlier_mask, w, h

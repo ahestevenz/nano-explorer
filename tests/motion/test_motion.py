@@ -410,3 +410,94 @@ class TestMotorTrimMapping:
         robot = robot_cls.return_value
         assert robot.left_motor.alpha == pytest.approx(0.7)
         assert robot.right_motor.alpha == pytest.approx(0.9)
+
+
+# lib/motion/teleoperation.py — auto-recovery
+class TestRecoveryPlan:
+    def test_segments_merge_held_key_and_cap_each_press_at_key_timeout(self):
+        from lib.motion.teleoperation import _segments_from_events
+
+        # Held "left" (presses every 0.05 s), then one "forward" press, then nothing.
+        events = [(10.00, "left"), (10.05, "left"), (10.10, "left"), (10.50, "forward")]
+        segs = _segments_from_events(events, since=9.0, until=11.0, key_timeout=0.15)
+        assert [a for a, _ in segs] == ["left", "forward"]
+        assert segs[0][1] == pytest.approx(0.05 + 0.05 + 0.15)
+        assert segs[1][1] == pytest.approx(0.15)
+
+    def test_segments_ignore_presses_outside_window(self):
+        from lib.motion.teleoperation import _segments_from_events
+
+        events = [(1.0, "forward"), (5.0, "left")]
+        segs = _segments_from_events(events, since=4.0, until=6.0, key_timeout=0.15)
+        assert segs == [("left", pytest.approx(0.15))]
+
+    def test_reverse_plan_inverts_newest_first_and_caps_total(self):
+        from lib.motion.teleoperation import _reverse_plan
+
+        plan = _reverse_plan([("forward", 1.5), ("left", 1.0)], max_total=2.0)
+        assert plan == [("right", pytest.approx(1.0)), ("backward", pytest.approx(1.0))]
+
+    def test_reverse_plan_skips_stop(self):
+        from lib.motion.teleoperation import _reverse_plan
+
+        assert _reverse_plan([("stop", 0.5), ("left", 0.2)], max_total=2.0) == [
+            ("right", pytest.approx(0.2))
+        ]
+
+
+class TestTeleopRecovery:
+    def _controller(self):
+        from lib.motion.teleoperation import TeleopController
+
+        controller = TeleopController(speed=0.2, turn_gain=0.5)
+        controller._motors = MagicMock()
+        return controller
+
+    def test_record_action_drops_old_history(self):
+        controller = self._controller()
+        controller._record_action("forward", now=100.0)
+        controller._record_action("left", now=106.0)
+        assert list(controller._history) == [(106.0, "left")]
+        assert controller._last_key_ts == 106.0
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_execute_plan_drives_inverse_moves_then_stops(self, _sleep):
+        controller = self._controller()
+        controller._execute_plan([("right", 0.1), ("backward", 0.05)])
+        motors = controller._motors
+        assert motors.turn_right.call_count == 2
+        motors.turn_right.assert_called_with(pytest.approx(0.1))
+        assert motors.backward.call_count == 1
+        motors.stop.assert_called_once()
+
+    @patch("lib.motion.teleoperation.time.sleep")
+    def test_cancelled_plan_stops_without_driving(self, _sleep):
+        controller = self._controller()
+        controller.cancel_recovery()
+        controller._execute_plan([("right", 1.0)])
+        controller._motors.turn_right.assert_not_called()
+        controller._motors.stop.assert_called_once()
+
+    def test_request_recovery_undoes_recent_moves(self):
+        import time as _time
+
+        controller = self._controller()
+        now = _time.time()
+        controller._record_action("left", now=now - 0.6)
+        with patch.object(controller, "_execute_plan") as execute:
+            assert controller.request_recovery(since=now - 1.0)
+            controller._recover_thread.join(timeout=2.0)
+        execute.assert_called_once()
+        plan = execute.call_args[0][0]
+        assert [a for a, _ in plan] == ["right"]
+
+    def test_request_recovery_cancelled_before_operator_releases(self):
+        import time as _time
+
+        controller = self._controller()
+        controller._last_key_ts = _time.time() + 10  # operator still "holding" a key
+        with patch.object(controller, "_execute_plan") as execute:
+            controller.request_recovery(since=0.0)
+            controller.cancel_recovery()
+            controller._recover_thread.join(timeout=2.0)
+        execute.assert_not_called()

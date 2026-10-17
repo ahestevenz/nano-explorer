@@ -109,6 +109,13 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         "keypoints on top, frame-to-frame matches below (green=raw, "
         "blue=surviving RANSAC)",
     )
+    p_slam.add_argument(
+        "--no-auto-recover",
+        action="store_false",
+        dest="auto_recover",
+        default=True,
+        help="Don't reverse your last moves automatically when tracking is lost",
+    )
     p_slam.set_defaults(func=_run_slam)
 
 

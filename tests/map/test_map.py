@@ -733,3 +733,99 @@ class TestInitDiagnostics:
     def test_binding_without_accessors_reports_nothing(self):
         slam = MagicMock(spec=["process_image_mono", "get_tracking_state"])
         assert self._mapper("orbslam3", slam)._init_diagnostics() == ""
+
+
+class TestSlamAutoRecoverFlag:
+    def test_default_auto_recover_is_true(self):
+        assert _parse(["slam"]).auto_recover is True
+
+    def test_no_auto_recover_flag(self):
+        assert _parse(["slam", "--no-auto-recover"]).auto_recover is False
+
+
+class TestMapSegments:
+    def _mapper(self, backend="orbslam3"):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"))
+        mapper._backend = backend
+        mapper._slam = MagicMock(spec=["get_map_count"])
+        mapper._slam.get_map_count.return_value = 2
+        return mapper
+
+    def test_restart_after_tracking_records_new_map(self):
+        mapper = self._mapper()
+        mapper._handle_state_change("RECENTLY_LOST", "NO_IMAGES", ts=50.0)
+        assert mapper._map_starts == [50.0]
+        assert mapper._map_label().startswith("map #2")
+
+    def test_startup_is_not_a_restart(self):
+        mapper = self._mapper()
+        mapper._handle_state_change(None, "NOT_INIT", ts=1.0)
+        mapper._handle_state_change("NOT_INIT", "OK", ts=2.0)
+        assert not mapper._map_starts
+        assert mapper._map_label() == "map #1"
+
+    def test_current_map_poses_keeps_only_poses_after_last_restart(self):
+        mapper = self._mapper()
+        poses = [np.eye(4) * k for k in range(1, 5)]
+        stamped = list(zip([1.0, 2.0, 6.0, 7.0], poses))
+        assert len(mapper._current_map_poses(stamped)) == 4
+        mapper._map_starts = [5.0]
+        assert mapper._current_map_poses(stamped) == poses[2:]
+
+    def test_loss_requests_recovery_and_relocalization_cancels_it(self):
+        mapper = self._mapper()
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "RECENTLY_LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_called_once_with(since=pytest.approx(29.0))
+        mapper._handle_state_change("RECENTLY_LOST", "OK", ts=31.0)
+        mapper._teleop.cancel_recovery.assert_called_once()
+
+    def test_orbslam2_recovers_in_lost(self):
+        mapper = self._mapper(backend="orbslam2")
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_called_once()
+
+    def test_auto_recover_disabled(self):
+        from lib.map.slam import SlamMapper
+
+        mapper = SlamMapper(
+            config_path=str(PROJECT_ROOT_PATH / "config/models/slam.yaml"), auto_recover=False
+        )
+        mapper._backend = "orbslam3"
+        mapper._teleop = MagicMock()
+        mapper._handle_state_change("OK", "RECENTLY_LOST", ts=30.0)
+        mapper._teleop.request_recovery.assert_not_called()
+
+
+class TestMapViewHeading:
+    def _pose(self, x, z, yaw_deg):
+        yaw = np.deg2rad(yaw_deg)
+        pose = np.eye(4)
+        # rotation about the camera's y axis: forward (+z) swings toward +x
+        pose[:3, :3] = [[np.cos(yaw), 0, np.sin(yaw)], [0, 1, 0], [-np.sin(yaw), 0, np.cos(yaw)]]
+        pose[0, 3], pose[2, 3] = x, z
+        return pose
+
+    def test_heading_arrow_changes_with_turn_in_place(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        straight = [self._pose(0, 0, 0), self._pose(0, 1, 0)]
+        turned = [self._pose(0, 0, 0), self._pose(0, 1, 90)]
+        a = SlamMapper._render_map_view(straight, frame, "OK", "orbslam3", 640, 480, "map #1")
+        b = SlamMapper._render_map_view(turned, frame, "OK", "orbslam3", 640, 480, "map #1")
+        assert a.shape == b.shape == (480, 640, 3)
+        assert not np.array_equal(a, b)
+
+    def test_forward_motion_is_drawn_upward(self):
+        from lib.map.slam import SlamMapper
+
+        frame = _dummy_frame()
+        traj = [self._pose(0, 0, 0), self._pose(0, 1, 0)]
+        out = SlamMapper._render_map_view(traj, frame, "OK", "orbslam3", 640, 480)
+        # Filled current-position dot (bright green) sits near the top, start near the bottom.
+        green = np.argwhere((out[:, :, 1] == 255) & (out[:, :, 0] == 0) & (out[:, :, 2] == 0))
+        assert green[:, 0].min() < 480 // 2

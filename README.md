@@ -248,7 +248,7 @@ nano-explorer map odometry --turn-gain GAIN            # turn gain 0.0-1.0 (defa
 nano-explorer map odometry --stream-port PORT
 nano-explorer map odometry --no-stream
 
-# Monocular SLAM — ORB-SLAM2 backend
+# Monocular SLAM — ORB-SLAM2 or ORB-SLAM3 backend (set in slam.yaml)
 # Stream shows a live top-down trajectory map with camera picture-in-picture
 nano-explorer map slam
 nano-explorer map slam --config YAML                   # config (default: ~/.nano-explorer/config/models/slam.yaml)
@@ -256,7 +256,35 @@ nano-explorer map slam --speed SPEED                   # motor speed 0.0-1.0 (de
 nano-explorer map slam --turn-gain GAIN                # turn gain 0.0-1.0 (default: 0.5)
 nano-explorer map slam --stream-port PORT
 nano-explorer map slam --no-stream
+nano-explorer map slam --visualize                     # debug view: keypoints + frame-to-frame matches
+nano-explorer map slam --no-auto-recover               # don't reverse your last moves when tracking is lost
 ```
+
+##### Reading the map view
+
+The stream shows the **current map only**, seen from above with the map's starting direction
+pointing up. The hollow circle is where the map started, the filled circle is the robot now, and
+the yellow arrow is the camera's heading, so a turn in place shows up as the arrow rotating.
+
+A single camera can't keep its bearings once tracking is lost for more than about 3 s: ORB-SLAM3
+then stores the map and starts a new one, with its own origin, heading and scale. The overlay says
+`map #N · … earlier maps not shown`, and the log prints a warning each time. Earlier maps only
+reconnect if the robot later sees a place it already mapped.
+
+##### Driving for SLAM
+
+- **Light and texture matter most.** Daylight or a lamp on the scene, and point the camera at
+  textured things (shelves, posters, clutter), not plain walls or floor.
+- **Start by driving forward** for a couple of seconds. A map can't initialize while parked or
+  while turning in place.
+- **Turn in short taps with a pause between them**, and drive forward a little between taps so
+  new map points are added as the view rotates. A long, held turn is the most common way to lose
+  tracking.
+- **When tracking is lost, let go of the keys.** Auto-recovery replays your last moves (up to
+  2 s) in reverse to bring the camera back to the mapped view, and hands control back as soon as
+  it relocalizes. Press any arrow key to take over at any time.
+- **When re-initializing, drive slowly** (`--speed 0.1`–`0.15`). Fast motion moves features
+  further between frames than the initializer searches.
 
 ##### Camera calibration
 
