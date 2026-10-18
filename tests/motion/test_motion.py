@@ -383,33 +383,33 @@ class TestCollisionModelPath:
 # lib/motor.py — trim-to-motor mapping
 class TestMotorTrimMapping:
     """
-    InvertedRobot drives the chassis in jetbot's "backward" direction, so
-    jetbot's left_motor is the robot's physical right wheel. Trim names the
-    physical wheels, so it must land on the opposite jetbot motor.
+    The motors are wired in the stock JetBot orientation, so jetbot's
+    left_motor is the robot's physical left wheel. Trim names the physical
+    wheels, so it must land on the same-named jetbot motor.
     """
 
     def _controller(self, robot_cls):
         import lib.motor as motor_mod
 
         with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
-            motor_mod, "InvertedRobot", robot_cls, create=True
+            motor_mod, "Robot", robot_cls, create=True
         ):
             controller = motor_mod.MotorController(left_trim=0.8, right_trim=1.0)
             controller.open()
         return controller
 
-    def test_open_swaps_trim_onto_jetbot_motors(self):
+    def test_open_maps_trim_onto_same_named_jetbot_motors(self):
         robot_cls = MagicMock()
         self._controller(robot_cls)
-        robot_cls.assert_called_once_with(left_motor_alpha=1.0, right_motor_alpha=0.8)
+        robot_cls.assert_called_once_with(left_motor_alpha=0.8, right_motor_alpha=1.0)
 
-    def test_set_trim_swaps_trim_onto_jetbot_motors(self):
+    def test_set_trim_maps_trim_onto_same_named_jetbot_motors(self):
         robot_cls = MagicMock()
         controller = self._controller(robot_cls)
         controller.set_trim(0.9, 0.7)
         robot = robot_cls.return_value
-        assert robot.left_motor.alpha == pytest.approx(0.7)
-        assert robot.right_motor.alpha == pytest.approx(0.9)
+        assert robot.left_motor.alpha == pytest.approx(0.9)
+        assert robot.right_motor.alpha == pytest.approx(0.7)
 
 
 # lib/motion/teleoperation.py — auto-recovery
@@ -528,35 +528,35 @@ class TestCameraExposure:
 
 # lib/motor.py — per-wheel speeds (steer / set_speeds)
 class TestMotorWheelSpeeds:
-    def test_physical_speeds_map_to_swapped_negated_jetbot_motors(self):
-        from lib.motor import _to_jetbot_motors
-
-        # Physical left 0.3, right 0.1: jetbot's left_motor is the physical right wheel,
-        # and jetbot "forward" is this chassis' backward.
-        assert _to_jetbot_motors(0.3, 0.1) == (pytest.approx(-0.1), pytest.approx(-0.3))
-
-    def test_forward_matches_inverted_robot_forward(self):
-        from lib.motor import _to_jetbot_motors
-
-        # InvertedRobot.forward(s) is jetbot backward(s): both jetbot motors at -s.
-        assert _to_jetbot_motors(0.2, 0.2) == (pytest.approx(-0.2), pytest.approx(-0.2))
-
     def _controller(self, robot_cls):
         import lib.motor as motor_mod
 
         with patch.object(motor_mod, "_HW_AVAILABLE", True), patch.object(
-            motor_mod, "InvertedRobot", robot_cls, create=True
+            motor_mod, "Robot", robot_cls, create=True
         ):
             controller = motor_mod.MotorController(left_trim=1.0, right_trim=1.0)
             controller.open()
         return controller
 
-    def test_set_speeds_goes_through_inverted_robot(self):
+    def test_set_speeds_passes_physical_speeds_to_jetbot_unchanged(self):
         robot_cls = MagicMock()
         controller = self._controller(robot_cls)
         controller.set_speeds(0.3, 0.1)
         robot = robot_cls.return_value
         robot.set_motors.assert_called_once_with(pytest.approx(0.3), pytest.approx(0.1))
+
+    def test_direction_commands_call_same_named_jetbot_methods(self):
+        robot_cls = MagicMock()
+        controller = self._controller(robot_cls)
+        robot = robot_cls.return_value
+        controller.forward(0.2)
+        controller.backward(0.2)
+        controller.turn_left(0.2)
+        controller.turn_right(0.2)
+        robot.forward.assert_called_once_with(speed=0.2)
+        robot.backward.assert_called_once_with(speed=0.2)
+        robot.left.assert_called_once_with(speed=0.2)
+        robot.right.assert_called_once_with(speed=0.2)
 
     def test_steer_right_drives_left_wheel_faster(self):
         robot_cls = MagicMock()
