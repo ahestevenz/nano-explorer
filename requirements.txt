@@ -12,6 +12,7 @@ Adafruit-PCA9685==1.0.1
 adafruit-circuitpython-pca9685==3.3.8
 adafruit-circuitpython-motor==3.3.0
 Jetson.GPIO==2.1.3          # GPIO control (non-camera peripherals)
+smbus2                      # BNO055 IMU register access on I2C bus 0 (lib/imu.py)
 
 # I/O & streaming
 # OpenCV is supplied by JetPack; no pip package here.

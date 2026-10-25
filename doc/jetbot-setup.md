@@ -10,6 +10,7 @@ A complete initialisation guide for the Waveshare JetBot on a Jetson Nano 4GB (M
 - JetPack 4.6 (provides CUDA 10.2, Python 3.6)
 - Waveshare JetBot kit with CSI camera
 - Internet connection on the Nano
+- Optional, for visual-inertial SLAM: DFRobot Gravity 10 DOF IMU (BNO055 + BMP280, SEN0253) — see [Step 12](#step-12--add-the-bno055-imu-optional)
 
 ---
 
@@ -776,7 +777,17 @@ ls /dev/video*
 sudo i2cdetect -y -r 1
 ```
 
-The motor driver (typically at address `0x40` or `0x60`) should appear in the grid.
+The motor driver (typically at address `0x40` or `0x60`) should appear in the grid. On this robot
+bus 1 shows:
+
+| Address | Device |
+|---|---|
+| `3c` | OLED display (SSD1306) |
+| `41` | Power / battery monitor (INA219) on the expansion board |
+| `60` | Motor driver (PCA9685) |
+| `70` | PCA9685 "all-call" address (same chip) |
+
+The optional IMU is on bus 0, not here — see [Step 12](#step-12--add-the-bno055-imu-optional).
 
 ---
 
@@ -816,6 +827,79 @@ Frame shape: (224, 224, 3)
 
 ---
 
+## Step 12 — Add the BNO055 IMU (optional)
+
+Only needed for visual-inertial SLAM (ORB-SLAM3 `IMU_MONOCULAR`); everything else runs without it.
+Background and plan: [`ADDING_IMU.md`](../ADDING_IMU.md).
+
+**Board:** DFRobot Gravity 10 DOF (SEN0253): Bosch BNO055 IMU + BMP280 barometer, 4-pin Gravity
+I2C connector. Only the BNO055 is used.
+
+### Wiring — I2C bus 0 (header pins 27/28)
+
+The IMU goes on its own bus, apart from the motor driver on bus 1 (pins 3/5): fast IMU polling then
+never competes with motor commands, and a stuck IMU transfer can't block the motors.
+
+| Board connector | Signal | Jetson J41 header pin |
+|---|---|---|
+| `+` / VCC (red) | Power | **pin 17 (3.3 V)** |
+| `-` / GND (black) | Ground | **pin 25** (or 30) |
+| `D` | I2C-SDA | **pin 27** |
+| `C` | I2C-SCL | **pin 28** |
+
+- **3.3 V, not 5 V.** The board works on both, but its pull-ups would then pull SDA/SCL toward 5 V,
+  and the Jetson pins aren't 5 V tolerant. Don't use pin 1 either if the expansion board already
+  takes it.
+- The two data wires (blue and green on the Gravity cable) aren't colour-coded in DFRobot's docs:
+  go by the `D` / `C` labels on the board (D = SDA, C = SCL). Swapping them does no harm — the chip
+  just doesn't show up in `i2cdetect` — so if in doubt, try one way and swap.
+- Don't use the expansion board's own 4-pin `SCL/SDA/3V3/GND` connector: that is bus 1.
+- Power off before wiring. Keep the wires short (< 20–30 cm) and away from the motor leads.
+
+### Mounting
+
+- **Rigid** (screws or stiff standoffs, not foam tape) and close to the camera: any shift after
+  camera-IMU calibration (Kalibr) invalidates it.
+- Square to the camera, away from the motors (vibration). Note which PCB axis (X/Y/Z) points
+  forward, left and up. On this robot, gravity reads on board **+X**, so X points up.
+
+### Software
+
+I2C access is already set up by [Step 3](#step-3--configure-i2c--user-permissions) (`i2c-tools`,
+`i2c` group). Install `smbus2` — `lib/imu.py` reads the registers directly, since Adafruit's BNO055
+library and Blinka no longer support Python 3.6:
+
+```bash
+sudo apt-get install -y python3-pip    # if pip3 is missing
+pip3 install --user smbus2
+```
+
+### Verify
+
+```bash
+sudo i2cdetect -y -r 0              # expect 28 = BNO055 (29 with I2C_ADDR high), 76 = BMP280
+sudo i2cget -y 0 0x28 0x00          # chip ID, expect 0xa0
+```
+
+Expected `i2cdetect` grid (everything else `--`):
+
+```
+20: -- -- -- -- -- -- -- -- 28 -- -- -- -- -- -- --
+70: -- -- -- -- -- -- 76 --
+```
+
+Then check live readings and the reader's sampling timing:
+
+```bash
+nano-explorer map imu-check -t 30          # idle
+nano-explorer map imu-check -t 30 --load   # with the other cores busy, as during SLAM
+```
+
+With the robot still, expect |acc| ≈ 9.8 m/s² (a few % off is an uncalibrated bias), gyro mean near
+0 rad/s, a rate close to 200 Hz, and few `late` intervals and no errors.
+
+---
+
 ## Troubleshooting
 
 ### Camera fails after reboot (dead CSI port on I2C bus 8)
@@ -844,6 +928,25 @@ chmod +x /usr/local/bin/warmup-camera.sh
 ```
 
 Run this once after every boot before starting your JetBot application. It clears the daemon state reliably.
+
+### BNO055 IMU not detected on bus 0
+
+- **Empty `i2cdetect -y -r 0` grid:** SDA and SCL are probably swapped. Power off, swap the two data
+  wires on pins 27/28, try again. Then check VCC on pin 17 (3.3 V) and GND on pin 25.
+- **Only `76` shows, no `28`/`29`:** the bus works but the BNO055 doesn't answer; check the board's
+  `I2C_ADDR` setting (`0x28` default, `0x29` when pulled high).
+- **`Permission denied` on `/dev/i2c-0`:** `sudo usermod -aG i2c $USER`, then log out and back in.
+- **`ModuleNotFoundError: No module named 'smbus2'`:** `pip3 install --user smbus2`.
+
+### BNO055 reads fail intermittently (`Remote I/O error`, `errors` > 0 in `map imu-check`)
+
+The BNO055 stretches the I2C clock, which some masters handle badly at 400 kHz. Check the bus speed:
+
+```bash
+cat /sys/bus/i2c/devices/i2c-0/bus_clk_rate
+```
+
+If it is `400000` and reads keep failing, run bus 0 at 100 kHz (a device-tree change on the Nano).
 
 ---
 

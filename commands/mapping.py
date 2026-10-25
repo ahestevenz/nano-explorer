@@ -127,6 +127,42 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     )
     p_slam.set_defaults(func=_run_slam)
 
+    # imu-check
+    p_imu = sub.add_parser(
+        "imu-check",
+        help="Check the BNO055 IMU readings and the reader's sampling timing",
+    )
+    p_imu.add_argument(
+        "-t",
+        "--seconds",
+        type=float,
+        default=10.0,
+        metavar="S",
+        help="How long to run (default: 10)",
+    )
+    p_imu.add_argument(
+        "--rate",
+        type=float,
+        default=200.0,
+        dest="rate_hz",
+        metavar="HZ",
+        help="Polling rate in Hz (default: 200)",
+    )
+    p_imu.add_argument(
+        "--bus",
+        type=int,
+        default=0,
+        metavar="N",
+        help="I2C bus the IMU is on (default: 0)",
+    )
+    p_imu.add_argument(
+        "--load",
+        action="store_true",
+        default=False,
+        help="Keep the other CPU cores busy, to measure the jitter under a SLAM-like load",
+    )
+    p_imu.set_defaults(func=_run_imu_check)
+
 
 # Dispatch functions
 
@@ -143,3 +179,10 @@ def _run_slam(args):
 
     config = SlamConfig(**vars(args))
     SlamMapper(**config.dict()).run()
+
+
+def _run_imu_check(args):
+    from lib.imu import ImuCheck, ImuCheckConfig
+
+    config = ImuCheckConfig(**vars(args))
+    ImuCheck(**config.dict()).run()

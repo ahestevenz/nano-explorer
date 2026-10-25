@@ -81,6 +81,10 @@ class TestRegister:
         ns = _parse(["slam"])
         assert ns.command == "slam"
 
+    def test_imu_check_subcommand_exists(self):
+        ns = _parse(["imu-check"])
+        assert ns.command == "imu-check"
+
     def test_missing_subcommand_exits(self):
         with pytest.raises(SystemExit):
             _make_parser().parse_args(["map"])
