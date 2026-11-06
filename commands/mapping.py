@@ -199,6 +199,102 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     )
     p_cam.set_defaults(func=_run_camera_check)
 
+    # record
+    p_rec = sub.add_parser(
+        "record",
+        help="Record camera + IMU as a EuRoC dataset while you drive (for offline VI-SLAM)",
+    )
+    p_rec.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help="Output directory (must not exist yet, or be empty)",
+    )
+    p_rec.add_argument(
+        "--imu-only",
+        action="store_true",
+        dest="imu_only",
+        default=False,
+        help="Record only the IMU, no camera or teleop (the stationary Allan-variance recording)",
+    )
+    p_rec.add_argument(
+        "-t",
+        "--seconds",
+        type=float,
+        default=None,
+        metavar="S",
+        help="Stop after S seconds (default: record until q / Ctrl+C)",
+    )
+    p_rec.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        metavar="FPS",
+        help="Camera frame rate (default: 30)",
+    )
+    p_rec.add_argument(
+        "--max-exposure-ms",
+        type=float,
+        default=None,
+        dest="max_exposure_ms",
+        metavar="MS",
+        help="Cap the auto-exposure time, as for map slam (default: Argus' range)",
+    )
+    p_rec.add_argument(
+        "--png-compression",
+        type=int,
+        default=1,
+        dest="png_compression",
+        metavar="0-9",
+        help="PNG compression level; lower writes faster (default: 1)",
+    )
+    p_rec.add_argument(
+        "--rate",
+        type=float,
+        default=200.0,
+        dest="imu_rate_hz",
+        metavar="HZ",
+        help="IMU polling rate in Hz (default: 200)",
+    )
+    p_rec.add_argument(
+        "--bus",
+        type=int,
+        default=0,
+        dest="imu_bus",
+        metavar="N",
+        help="I2C bus the IMU is on (default: 0)",
+    )
+    p_rec.add_argument(
+        "--stream",
+        action="store_true",
+        default=False,
+        help="Serve the camera view over MJPEG while recording (costs CPU)",
+    )
+    p_rec.add_argument(
+        "--stream-port",
+        type=int,
+        default=settings.stream_port,
+        dest="stream_port",
+        metavar="PORT",
+        help="MJPEG server port (default: 8080)",
+    )
+    p_rec.add_argument(
+        "--speed",
+        type=float,
+        default=0.2,
+        metavar="SPEED",
+        help="Motor speed 0.0-1.0 (default: 0.2)",
+    )
+    p_rec.add_argument(
+        "--turn-gain",
+        type=float,
+        default=0.5,
+        dest="turn_gain",
+        metavar="GAIN",
+        help="Turn gain 0.0-1.0 (default: 0.5)",
+    )
+    p_rec.set_defaults(func=_run_record)
+
 
 # Dispatch functions
 
@@ -229,3 +325,10 @@ def _run_camera_check(args):
 
     config = CameraCheckConfig(**vars(args))
     CameraCheck(**config.dict()).run()
+
+
+def _run_record(args):
+    from lib.map.recorder import Recorder, RecorderConfig
+
+    config = RecorderConfig(**vars(args))
+    Recorder(**config.dict()).run()

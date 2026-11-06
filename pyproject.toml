@@ -81,6 +81,8 @@ ignore = [
     "UP007", # Use X | Y for type unions (py3.10+, not available on 3.6)
     "UP006", # Use type instead of Type (py3.9+)
     "UP035", # typing imports (py3.9+)
+    "UP021", # universal_newlines -> text= in subprocess (py3.7+; ruff can't target py36)
+    "UP022", # stdout/stderr=PIPE -> capture_output= in subprocess (py3.7+)
     "SIM108", # ternary operator (readability preference)
     "E402", # module level import not at top of file
 ]
