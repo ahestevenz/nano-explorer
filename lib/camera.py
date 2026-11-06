@@ -9,6 +9,7 @@ Usage:
     cam = Camera(width=640, height=480, fps=30, source="csi")
     cam.open()
     frame = cam.read()   # numpy BGR array
+    frame, t_ns = cam.read_stamped()   # + CLOCK_MONOTONIC ns, the IMU's clock
     cam.release()
 
     # Or as a context manager:
@@ -16,14 +17,17 @@ Usage:
         frame = cam.read()
 """
 
+import multiprocessing as mp
 import threading
-from typing import Optional
+import time
+from typing import Any, List, NamedTuple, Optional, Tuple
 
 import cv2
 import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
+from lib.imu import _burn, monotonic_ns
 from lib.network import get_wifi_ip
 
 # GStreamer pipeline for CSI camera (uses NVIDIA hardware decoder)
@@ -166,6 +170,13 @@ class CameraConfig(BaseModel):
                    None keeps Argus' own range (up to ~680 ms). Capping it trades
                    blur for noise: auto-exposure raises gain instead, which ORB
                    copes with better than motion blur.
+        timestamps: What read_stamped() stamps a frame with, on CLOCK_MONOTONIC
+                   (the IMU's clock):
+                   "read" — the time read() returned. Always works, but includes
+                            the pipeline's latency and its jitter.
+                   "pts"  — the buffer timestamp (CAP_PROP_POS_MSEC), shifted
+                            onto CLOCK_MONOTONIC. Closer to the capture time;
+                            only valid if `map camera-check` says so.
     """
 
     width: int = Field(640, gt=0)
@@ -174,12 +185,32 @@ class CameraConfig(BaseModel):
     source: str = "csi"
     device_id: int = Field(0, ge=0)
     exposure_max_ms: Optional[float] = Field(None, gt=0)
+    timestamps: str = "read"
 
     @validator("source")
     def source_must_be_valid(cls, v):  # pylint: disable=no-self-argument
         if v not in ("csi", "usb"):
             raise ValueError("source must be 'csi' or 'usb'")
         return v
+
+    @validator("timestamps")
+    def timestamps_must_be_valid(cls, v):  # pylint: disable=no-self-argument
+        if v not in ("read", "pts"):
+            raise ValueError("timestamps must be 'read' or 'pts'")
+        return v
+
+
+class FrameTimes(NamedTuple):
+    """
+    Both clocks for one frame, in ns.
+
+    read_ns: CLOCK_MONOTONIC right after read() returned.
+    pts_ns:  The buffer timestamp OpenCV reports (CAP_PROP_POS_MSEC), on the
+             pipeline's own time base; None when the backend reports none (< 0).
+    """
+
+    read_ns: int
+    pts_ns: Optional[int]
 
 
 class Camera:
@@ -191,9 +222,17 @@ class Camera:
     def __init__(self, **kwargs):
         self._config = CameraConfig(**kwargs)
         self._cap = None
+        # read_stamped()'s PTS state; reset by open().
+        self._last_pts_ns: Optional[int] = None
+        self._pts_offset_ns: Optional[int] = None
+
+    def _reset_clock(self) -> None:
+        self._last_pts_ns = None
+        self._pts_offset_ns = None
 
     def open(self) -> None:
         """Open the camera. Raises RuntimeError if it cannot be opened."""
+        self._reset_clock()
 
         if self._config.source == "csi":
             pipeline = _GST_CSI_PIPELINE.format(
@@ -237,6 +276,49 @@ class Camera:
             raise RuntimeError("Failed to read frame from camera.")
         return frame
 
+    def read_timed(self) -> Tuple[np.ndarray, FrameTimes]:
+        """Read one frame, with its read time and raw buffer timestamp."""
+        frame = self.read()
+        read_ns = monotonic_ns()
+        pts_ms = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+        # 0 is a valid first PTS; a backend without timestamps returns -1, or 0
+        # on every frame (which read_stamped() and the check reject as not increasing).
+        pts_ns = int(round(pts_ms * 1e6)) if np.isfinite(pts_ms) and pts_ms >= 0 else None
+        return frame, FrameTimes(read_ns, pts_ns)
+
+    def read_stamped(self) -> Tuple[np.ndarray, int]:
+        """
+        Read one frame and its timestamp on CLOCK_MONOTONIC, in ns — the clock
+        the IMU samples use (lib/imu.py), so the two streams can be matched.
+
+        With timestamps="pts", the buffer timestamp is shifted onto
+        CLOCK_MONOTONIC by the smallest (read time - PTS) seen so far: that is
+        the pipeline's clock offset plus its shortest latency, and settles
+        within the first frames. Its constant part is what Kalibr's time-offset
+        estimate takes out.
+
+        Raises:
+            RuntimeError: as read(); or with timestamps="pts", if a frame comes
+                without a buffer timestamp or with one that doesn't increase
+                (switch to timestamps="read").
+        """
+        frame, times = self.read_timed()
+        if self._config.timestamps == "read":
+            return frame, times.read_ns
+
+        if times.pts_ns is None or (
+            self._last_pts_ns is not None and times.pts_ns <= self._last_pts_ns
+        ):
+            raise RuntimeError(
+                f"Camera buffer timestamp unusable (got {times.pts_ns}, previous "
+                f"{self._last_pts_ns}); use timestamps='read'."
+            )
+        self._last_pts_ns = times.pts_ns
+        lag = times.read_ns - times.pts_ns
+        if self._pts_offset_ns is None or lag < self._pts_offset_ns:
+            self._pts_offset_ns = lag
+        return frame, times.pts_ns + self._pts_offset_ns
+
     def release(self) -> None:
         """Release the camera resource."""
         if self._cap is not None:
@@ -254,3 +336,186 @@ class Camera:
     @property
     def is_open(self) -> bool:
         return self._cap is not None and self._cap.isOpened()
+
+
+# Frame timing check (`nano-explorer map camera-check`)
+
+# (read time - PTS) steadier than this means POS_MSEC is just the pipeline
+# position at the time of the query, i.e. the read time again, not the capture.
+_LAG_STD_FLOOR_MS = 0.05
+
+
+class IntervalSummary(NamedTuple):
+    """Frame-to-frame intervals, in ms. late: intervals over 1.5x the frame period."""
+
+    mean_ms: float
+    std_ms: float
+    p99_ms: float
+    max_ms: float
+    late: int
+
+
+class CameraTiming(NamedTuple):
+    """
+    Result of analyze_frame_times().
+
+    read:      intervals between read times.
+    pts:       intervals between buffer timestamps; None if they're unusable.
+    lag_std_ms / lag_spread_ms: jitter of (read time - PTS): its std and its
+               p99 above the minimum. None if the PTS is unusable.
+    verdict:   the CameraConfig.timestamps value to use, "pts" or "read".
+    reason:    why.
+    """
+
+    frames: int
+    read: IntervalSummary
+    pts: Optional[IntervalSummary]
+    lag_std_ms: Optional[float]
+    lag_spread_ms: Optional[float]
+    verdict: str
+    reason: str
+
+
+def _intervals(ts_ns: List[int], period_ms: float) -> IntervalSummary:
+    dt = np.diff(np.asarray(ts_ns, dtype=np.int64)) / 1e6
+    return IntervalSummary(
+        mean_ms=float(dt.mean()),
+        std_ms=float(dt.std()),
+        p99_ms=float(np.percentile(dt, 99)),
+        max_ms=float(dt.max()),
+        late=int((dt > 1.5 * period_ms).sum()),
+    )
+
+
+def analyze_frame_times(times: List[FrameTimes], fps: float) -> CameraTiming:
+    """
+    Decide which frame timestamp to trust, from the FrameTimes of a recording.
+
+    The buffer timestamp is worth using only if it is a real capture time:
+    present and increasing on every frame, steadier than the read time, and not
+    moving in lock-step with it (which would mean it's the query time).
+    """
+    if len(times) < 3:
+        raise ValueError(f"need at least 3 frames, got {len(times)}")
+    period_ms = 1000.0 / fps
+    read = _intervals([t.read_ns for t in times], period_ms)
+
+    def _read_only(reason: str) -> CameraTiming:
+        return CameraTiming(len(times), read, None, None, None, "read", reason)
+
+    pts_ns = [t.pts_ns for t in times]
+    if any(p is None for p in pts_ns):
+        return _read_only("the backend reports no buffer timestamp (POS_MSEC < 0)")
+    if not any(pts_ns):
+        return _read_only("the backend reports no buffer timestamp (POS_MSEC is always 0)")
+    if any(b <= a for a, b in zip(pts_ns, pts_ns[1:])):
+        return _read_only("buffer timestamps don't increase on every frame")
+
+    pts = _intervals(pts_ns, period_ms)
+    lag = np.array([t.read_ns - t.pts_ns for t in times], dtype=np.int64) / 1e6
+    lag_std = float(lag.std())
+    lag_spread = float(np.percentile(lag, 99) - lag.min())
+    result = CameraTiming(len(times), read, pts, lag_std, lag_spread, "read", "")
+
+    if lag_std < _LAG_STD_FLOOR_MS:
+        return result._replace(
+            reason="POS_MSEC moves in lock-step with the read time: it's the pipeline "
+            "position when queried, not the capture time"
+        )
+    if pts.std_ms >= 0.5 * read.std_ms:
+        return result._replace(reason="buffer timestamps are no steadier than the read time")
+    return result._replace(
+        verdict="pts",
+        reason=f"buffer timestamps are {read.std_ms / max(pts.std_ms, 1e-6):.0f}x steadier "
+        "than the read time",
+    )
+
+
+class CameraCheckConfig(BaseModel):
+    """
+    Args:
+        seconds:  How long to record frame times, after the warm-up.
+        warmup_s: Frames to drop first, while Argus settles exposure.
+        width / height / fps / exposure_max_ms: As CameraConfig; keep them as
+                  the SLAM run will use them.
+        load:     Keep every other core busy, as ORB-SLAM3 does.
+    """
+
+    seconds: float = Field(20.0, gt=0)
+    warmup_s: float = Field(2.0, ge=0)
+    width: int = Field(640, gt=0)
+    height: int = Field(480, gt=0)
+    fps: int = Field(30, gt=0)
+    exposure_max_ms: Optional[float] = Field(None, gt=0)
+    load: bool = False
+
+
+class CameraCheck:
+    """
+    Measures the CSI camera's frame timing (`nano-explorer map camera-check`)
+    and says which timestamp read_stamped() should use.
+
+    What to look for:
+      - verdict: "pts" means the buffer timestamp is a capture time and should
+        be used (CameraConfig timestamps="pts"); "read" means stick to the read
+        time.
+      - read interval std / p99: the jitter left in read-time stamps. Kalibr
+        removes a constant offset, not this.
+      - lag spread: how far the read time strays from the capture time.
+      - late intervals: dropped frames (appsink drops when the reader falls behind).
+    """
+
+    def __init__(self, **kwargs: Any):
+        self._config = CameraCheckConfig(**kwargs)
+
+    def _collect(self) -> List[FrameTimes]:
+        cfg = self._config
+        times: List[FrameTimes] = []
+        with Camera(
+            width=cfg.width, height=cfg.height, fps=cfg.fps, exposure_max_ms=cfg.exposure_max_ms
+        ) as cam:
+            t_start = time.monotonic()
+            while time.monotonic() - t_start < cfg.warmup_s:
+                cam.read()
+            logger.info(f"Recording frame times for {cfg.seconds:g} s...")
+            t_end = time.monotonic() + cfg.seconds
+            while time.monotonic() < t_end:
+                times.append(cam.read_timed()[1])
+        return times
+
+    def run(self) -> CameraTiming:
+        cfg = self._config
+        stop_load = mp.Event()
+        burners = []
+        if cfg.load:
+            for _ in range(max(1, mp.cpu_count() - 1)):
+                p = mp.Process(target=_burn, args=(stop_load,), daemon=True)
+                p.start()
+                burners.append(p)
+            logger.info(f"CPU load: {len(burners)} busy processes")
+        try:
+            times = self._collect()
+        finally:
+            stop_load.set()
+            for p in burners:
+                p.join(timeout=1.0)
+
+        res = analyze_frame_times(times, cfg.fps)
+        r = res.read
+        logger.info(f"frames:        {res.frames} ({res.frames / cfg.seconds:.1f} fps)")
+        logger.info(
+            f"read interval: mean {r.mean_ms:.2f} ms, std {r.std_ms:.2f}, "
+            f"p99 {r.p99_ms:.2f}, max {r.max_ms:.2f}, late {r.late}"
+        )
+        if res.pts is not None:
+            p = res.pts
+            logger.info(
+                f"PTS interval:  mean {p.mean_ms:.2f} ms, std {p.std_ms:.2f}, "
+                f"p99 {p.p99_ms:.2f}, max {p.max_ms:.2f}, late {p.late}"
+            )
+            logger.info(
+                f"read - PTS:    std {res.lag_std_ms:.2f} ms, "
+                f"p99 above min {res.lag_spread_ms:.2f} ms"
+            )
+        logger.success(f"verdict: timestamps='{res.verdict}' — {res.reason}")
+        return res

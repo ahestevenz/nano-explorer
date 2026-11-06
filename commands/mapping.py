@@ -163,6 +163,42 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
     )
     p_imu.set_defaults(func=_run_imu_check)
 
+    # camera-check
+    p_cam = sub.add_parser(
+        "camera-check",
+        help="Measure the camera's frame timing and pick the frame timestamp source",
+    )
+    p_cam.add_argument(
+        "-t",
+        "--seconds",
+        type=float,
+        default=20.0,
+        metavar="S",
+        help="How long to record frame times, after a 2 s warm-up (default: 20)",
+    )
+    p_cam.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        metavar="FPS",
+        help="Camera frame rate (default: 30)",
+    )
+    p_cam.add_argument(
+        "--max-exposure-ms",
+        type=float,
+        default=None,
+        dest="exposure_max_ms",
+        metavar="MS",
+        help="Cap the auto-exposure time, as for map slam (default: Argus' range)",
+    )
+    p_cam.add_argument(
+        "--load",
+        action="store_true",
+        default=False,
+        help="Keep the other CPU cores busy, to measure the jitter under a SLAM-like load",
+    )
+    p_cam.set_defaults(func=_run_camera_check)
+
 
 # Dispatch functions
 
@@ -186,3 +222,10 @@ def _run_imu_check(args):
 
     config = ImuCheckConfig(**vars(args))
     ImuCheck(**config.dict()).run()
+
+
+def _run_camera_check(args):
+    from lib.camera import CameraCheck, CameraCheckConfig
+
+    config = CameraCheckConfig(**vars(args))
+    CameraCheck(**config.dict()).run()
