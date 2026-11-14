@@ -50,6 +50,11 @@ _PWR_NORMAL = 0x00
 _UNIT_SEL = 0x02
 _ACC_LSB_PER_MS2 = 100.0
 _GYR_LSB_PER_RADS = 900.0
+# Measured gyro scale correction at ±2000 dps: two full turns by hand on a table
+# integrated to 662 deg instead of 720, repeatably (+-0.2 %, 4 legs, 2 runs), so
+# readings are multiplied by 720 / 662. Measured about the up axis (BNO055 +X);
+# applied to all three, since it looks like the chip's unit conversion.
+GYR_SCALE = 1.087
 
 # Sensor configs only stick in non-fusion modes like ACCGYRO (fusion modes
 # overwrite them). They are fixed here because the noise values calibrated from
@@ -58,9 +63,9 @@ _GYR_LSB_PER_RADS = 900.0
 # polling), normal power.
 _ACC_CONFIG = 0b000_100_01
 # Gyroscope: ±2000 dps, 47 Hz bandwidth (400 Hz data rate), normal power. The
-# JetBot's turns in place jerk past 500 dps (seq04: 580, seq01: 966, unclipped
-# even though the chip read back ±500), so use the widest range: the gyro's
-# noise doesn't depend on it and the output scale is fixed (16 LSB/dps).
+# chip doesn't rescale its output with the range: at ±500 it read 3.669x the
+# true rate, 4x the ±2000 reading (hand-rotation tests, ADDING_IMU.md). ±2000
+# is its default and needs the smaller correction, GYR_SCALE below.
 _GYR_CONFIG_0 = 0b00_011_000
 _GYR_CONFIG_1 = 0x00
 
@@ -103,7 +108,8 @@ def decode(raw: List[int]) -> Tuple[Tuple[float, float, float], Tuple[float, flo
     """(gyro [rad/s], acc [m/s²]) from the 18 data bytes starting at ACC_DATA."""
     ax, ay, az, _mx, _my, _mz, gx, gy, gz = struct.unpack("<9h", bytes(raw))
     acc = (ax / _ACC_LSB_PER_MS2, ay / _ACC_LSB_PER_MS2, az / _ACC_LSB_PER_MS2)
-    gyro = (gx / _GYR_LSB_PER_RADS, gy / _GYR_LSB_PER_RADS, gz / _GYR_LSB_PER_RADS)
+    k = GYR_SCALE / _GYR_LSB_PER_RADS
+    gyro = (gx * k, gy * k, gz * k)
     return gyro, acc
 
 

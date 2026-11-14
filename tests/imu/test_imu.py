@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from lib import imu
-from lib.imu import BNO055, ImuConfig, ImuReader, ImuSample, decode, sample_loop
+from lib.imu import BNO055, GYR_SCALE, ImuConfig, ImuReader, ImuSample, decode, sample_loop
 from lib.settings import NanoSettings
 
 
@@ -64,11 +64,17 @@ class FakeClock:
 
 
 # decode()
+def test_gyro_scale_from_rotation_test():
+    # Two hand turns integrated to 662 deg at ±2000 dps (ADDING_IMU.md).
+    assert pytest.approx(720 / 662, rel=1e-3) == GYR_SCALE
+
+
 class TestDecode:
     def test_units(self):
         gyro, acc = decode(_raw(acc=(981, -100, 0), gyro=(900, -450, 9)))
         assert acc == pytest.approx((9.81, -1.0, 0.0))
-        assert gyro == pytest.approx((1.0, -0.5, 0.01))
+        k = GYR_SCALE  # measured scale correction
+        assert gyro == pytest.approx((1.0 * k, -0.5 * k, 0.01 * k))
 
     def test_magnetometer_ignored(self):
         gyro, acc = decode(_raw(mag=(1234, -5678, 42)))
@@ -99,7 +105,7 @@ class TestBNO055:
         gyro, acc = BNO055(bus, address=0x29).read()
         assert bus.block_reads == [(0x29, 0x08, 18)]
         assert acc == pytest.approx((1.0, 0.0, 0.0))
-        assert gyro == pytest.approx((0.0, 0.0, 1.0))
+        assert gyro == pytest.approx((0.0, 0.0, GYR_SCALE))
 
 
 # sample_loop()

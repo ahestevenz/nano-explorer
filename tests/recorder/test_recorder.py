@@ -192,6 +192,7 @@ class TestCameraRecording:
         assert on_disk["imu_covers_camera"] is True
         assert on_disk["config"]["fps"] == 30
         assert on_disk["clock"].startswith("CLOCK_MONOTONIC")
+        assert on_disk["imu"]["gyro_scale"] == pytest.approx(1.087)
         assert meta["camera"]["timing"]["read"]["mean_ms"] == pytest.approx(33.333, abs=0.01)
 
     def test_loop_never_writes_to_disk(self, tmp_path):

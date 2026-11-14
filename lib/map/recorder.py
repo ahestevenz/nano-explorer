@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field, validator
 
 from lib.camera import Camera, FrameTimes, analyze_frame_times
 from lib.camera_motion_mixin import CameraMotionMixIn
-from lib.imu import ImuReader, ImuSample
+from lib.imu import GYR_SCALE, ImuReader, ImuSample
 from lib.settings import PROJECT_ROOT_PATH
 
 _CAM_HEADER = "#timestamp [ns],filename\n"
@@ -404,6 +404,7 @@ class Recorder(CameraMotionMixIn):
             "config": json.loads(cfg.json()),
             "imu": {
                 "samples": writer.imu_samples,
+                "gyro_scale": GYR_SCALE,  # already applied to imu0/data.csv
                 "first_ns": writer.imu_first_ns,
                 "last_ns": writer.imu_last_ns,
                 "stats": imu.stats()._asdict() if imu is not None else None,
