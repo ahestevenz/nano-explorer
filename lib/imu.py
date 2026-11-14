@@ -57,9 +57,11 @@ _GYR_LSB_PER_RADS = 900.0
 # Accelerometer: ±4 g, 125 Hz bandwidth (data updates at 2x that, above 200 Hz
 # polling), normal power.
 _ACC_CONFIG = 0b000_100_01
-# Gyroscope: ±500 dps (a hand-waved Kalibr sequence can pass 250 dps), 47 Hz
-# bandwidth (400 Hz data rate), normal power.
-_GYR_CONFIG_0 = 0b00_011_010
+# Gyroscope: ±2000 dps, 47 Hz bandwidth (400 Hz data rate), normal power. The
+# JetBot's turns in place jerk past 500 dps (seq04: 580, seq01: 966, unclipped
+# even though the chip read back ±500), so use the widest range: the gyro's
+# noise doesn't depend on it and the output scale is fixed (16 LSB/dps).
+_GYR_CONFIG_0 = 0b00_011_000
 _GYR_CONFIG_1 = 0x00
 
 # The datasheet's mode switch times: 19 ms from CONFIG to any other mode, 7 ms

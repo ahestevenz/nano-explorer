@@ -86,7 +86,7 @@ class TestBNO055:
         assert regs[-1] == (0x3D, 0x05)  # ACCGYRO mode last
         # Page 1 sensor configs are written between the page switches.
         p1, p0 = regs.index((0x07, 1)), regs.index((0x07, 0))
-        assert set(regs[p1 + 1 : p0]) == {(0x08, 0x11), (0x0A, 0x1A), (0x0B, 0x00)}
+        assert set(regs[p1 + 1 : p0]) == {(0x08, 0x11), (0x0A, 0x18), (0x0B, 0x00)}
         assert (0x3B, 0x02) in regs[p0:]  # m/s², rad/s
         assert all(addr == 0x28 for addr, _r, _v in bus.writes)
 
