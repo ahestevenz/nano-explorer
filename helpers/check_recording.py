@@ -19,8 +19,8 @@ Each recording gets OK / WARN / FAIL lines for:
   - IMU:       rate, gaps, increasing timestamps, and that it covers the frames.
 
 --write-times writes DIR/times_trimmed.txt: the frame list without the first
---skip-start seconds and without frames read more than --max-read-error-ms
-late. ORB-SLAM3's mono_inertial_euroc takes it in place of times.txt, so the
+--skip-start seconds, without frames read more than --max-read-error-ms late,
+and without frames the camera delivered late (PTS jitter). ORB-SLAM3's mono_inertial_euroc takes it in place of times.txt, so the
 recording itself is never changed.
 
 Exit code: 1 if any recording has a FAIL, else 0. Needs only numpy.
@@ -142,6 +142,20 @@ def _check_frames(
                 f"{skip_start_s:g} s (skipped)"
             )
         gaps = gaps[~in_start]
+        late_frames = pts_late_frames(rec, fps)
+        after = (rec.frame_ns[late_frames] - rec.frame_ns[0]) / 1e9 >= skip_start_s
+        late_frames = late_frames[after]
+        if len(late_frames):
+            worst = (pdt[late_frames - 1] - period).max()
+            checks.append(
+                Check(
+                    WARN,
+                    "frames",
+                    f"{len(late_frames)} frames delivered late by the camera (nothing lost), "
+                    f"up to +{worst:.0f} ms: trimmed",
+                )
+            )
+        gaps = gaps[~np.isin(gaps + 1, late_frames)]  # a late frame isn't a lost one
         # Frame numbers that jump: the frames were read but the writer's queue
         # was full (slow SD card). Else a frame read late right after a gap
         # waited in appsink: the recording loop stalled and appsink dropped the
@@ -167,6 +181,23 @@ def _check_frames(
                     )
                 )
     return checks
+
+
+def pts_late_frames(rec: Recording, fps: float) -> np.ndarray:
+    """
+    Frames the camera delivered late: a PTS interval over 1.25 periods followed
+    by one under 0.75 (seq03: 51 ms then 16-19 ms). Nothing was lost, but the
+    frame's PTS, and so its read time, is ~half a period late: the read-time
+    check can't see that, since read - PTS stays normal.
+    """
+    if rec.pts_ns is None or len(rec.pts_ns) < 3:
+        return np.zeros(0, dtype=np.int64)
+    period = 1000.0 / fps
+    pdt = np.diff(rec.pts_ns) / 1e6
+    late = (pdt[:-1] > 1.25 * period) & (pdt[1:] < 0.75 * period)
+    if rec.index is not None:
+        late &= np.diff(rec.index)[:-1] == 1  # not right after a writer drop
+    return np.where(late)[0] + 1
 
 
 def read_errors_ms(rec: Recording) -> Optional[np.ndarray]:
@@ -225,10 +256,13 @@ def _check_imu(rec: Recording, rate_hz: float) -> List[Check]:
     return checks
 
 
-def frames_to_keep(rec: Recording, skip_start_s: float, max_error_ms: float) -> List[int]:
+def frames_to_keep(
+    rec: Recording, skip_start_s: float, max_error_ms: float, fps: float = _FPS
+) -> List[int]:
     after = (rec.frame_ns - rec.frame_ns[0]) / 1e9 >= skip_start_s
     err = read_errors_ms(rec)
     ok = after if err is None else after & (err <= max_error_ms)
+    ok[pts_late_frames(rec, fps)] = False
     # The IMU must start before the first frame ORB-SLAM3 sees.
     ok &= rec.frame_ns > rec.imu_ns[0]
     return [int(i) for i in np.where(ok)[0]]
@@ -250,7 +284,7 @@ def check_recording(
     if not any(c.level == FAIL and c.name == "frames" for c in checks):
         checks += _check_read_time(rec, skip_start_s, max_error_ms)
     checks += _check_imu(rec, imu_rate_hz)
-    keep = frames_to_keep(rec, skip_start_s, max_error_ms) if len(rec.imu_ns) else []
+    keep = frames_to_keep(rec, skip_start_s, max_error_ms, fps) if len(rec.imu_ns) else []
     return Report(root, checks, keep)
 
 

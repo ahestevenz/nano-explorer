@@ -29,14 +29,17 @@ def _make(
     meta=None,
     skip_png=None,
     not_saved=(),
+    pts_late=None,
 ):
     """
     Write a recording: n frames at 30 fps; `late` maps frame -> extra read ms;
     frame indices in `drop` are lost by the camera, those in `stall_after` are
     lost to a recording-loop stall (the next frame is read late), those in
-    `not_saved` were read but dropped by the writer (their frame number is skipped).
+    `not_saved` were read but dropped by the writer (their frame number is skipped);
+    `pts_late` maps frame -> ms the camera delivered it late (PTS and read time).
     """
     late = dict(late or {})
+    pts_late = dict(pts_late or {})
     (root / "mav0/cam0/data").mkdir(parents=True)
     (root / "mav0/imu0").mkdir(parents=True)
     cam, raw, times = ["#timestamp [ns],filename"], ["#frame,timestamp [ns],read [ns],pts [ns]"], []
@@ -48,7 +51,7 @@ def _make(
         if i in not_saved:
             k += 1
             continue
-        p = i * _PERIOD
+        p = i * _PERIOD + pts_late.get(i, 0) * _MS
         extra = late.get(i, 0) + (20 if i - 1 in stall_after else 0)
         read = _T0 + p + _LAG + extra * _MS
         cam.append(f"{read},{read}.png")
@@ -116,6 +119,20 @@ class TestCheckRecording:
         report = cr.check_recording(_make(tmp_path, not_saved=(40,), late={41: 12}))
         assert "not saved, writer queue full" in _messages(report)
         assert "stalled" not in _messages(report)
+
+    def test_camera_jitter_is_not_a_lost_frame(self, tmp_path):
+        # seq03: PTS intervals of 51 ms then 16 ms, nothing lost.
+        report = cr.check_recording(_make(tmp_path, pts_late={50: 17}))
+        msg = _messages(report)
+        assert "1 frames delivered late by the camera (nothing lost), up to +17 ms" in msg
+        assert "camera missed" not in msg
+        assert 50 not in report.keep and 49 in report.keep and 51 in report.keep
+
+    def test_late_frame_after_writer_drop_is_still_a_drop(self, tmp_path):
+        report = cr.check_recording(_make(tmp_path, not_saved=(49,), pts_late={50: 17}))
+        msg = _messages(report)
+        assert "not saved, writer queue full" in msg
+        assert "delivered late" not in msg
 
     def test_missing_png_fails(self, tmp_path):
         report = cr.check_recording(_make(tmp_path, skip_png=10))
