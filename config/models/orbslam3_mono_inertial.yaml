@@ -8,7 +8,7 @@
 #
 # Still to replace:
 #   - Tbc: from Kalibr (stage 2). The rotation below comes from seq01's data and
-#     assumes the BNO055's +Z points forward; see the Tbc comment.
+#     the tip test (+Z forward); see the Tbc comment.
 #   - IMU noise: datasheet values (the Allan variance was skipped).
 
 Vocabulary: "assets/models/ORBvoc.txt"
@@ -40,11 +40,10 @@ Camera.RGB: 0
 #
 # Camera frame: x right, y down, z forward. BNO055 frame, from seq01:
 #   +X up (gravity 10.2 deg off it; turns rotate about it),
-#   ±Z forward/backward (carries the start/stop acceleration),
-#   ±Y sideways.
-# Below assumes +Z forward, so +Y right: camera x -> +Y, y -> -X, z -> +Z.
-# If the tip test says +Z points BACKWARD (Z reads positive with the nose
-# tipped down), use instead:
+#   +Z forward, +Y right (tip test, 2026-11-14: Z goes negative and gyro Y
+#   negative with the nose tipped down).
+# So camera x -> +Y, y -> -X, z -> +Z. If the IMU is ever remounted with +Z
+# pointing BACKWARD (Z reads positive with the nose tipped down), use instead:
 #   data: [ 0.0, -1.0,  0.0, 0.0,
 #          -1.0,  0.0,  0.0, 0.0,
 #           0.0,  0.0, -1.0, 0.0,

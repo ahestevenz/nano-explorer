@@ -66,7 +66,10 @@ class RecorderConfig(BaseModel):
         png_compression: PNG compression level 0-9. Low is fast to write on
                          the Nano; PNG is lossless at every level.
         queue_frames:    Frames that may wait for the writer before new ones are
-                         dropped (and counted).
+                         dropped (and counted). The SD card can fall behind 30 fps
+                         once Linux's write cache is full (seq03: from ~75 s on);
+                         600 frames (20 s, ~185 MB of RAM at 640x480 grayscale)
+                         absorb that for a 2-minute recording.
         imu_rate_hz / imu_bus: As for `map imu-check`.
         stream / stream_port: Serve the camera view over MJPEG (costs CPU).
         speed / turn_gain: Teleop motor speed and turn gain, as for `map slam`.
@@ -80,7 +83,7 @@ class RecorderConfig(BaseModel):
     fps: int = Field(30, gt=0)
     max_exposure_ms: Optional[float] = Field(None, gt=0)
     png_compression: int = Field(1, ge=0, le=9)
-    queue_frames: int = Field(60, gt=0)
+    queue_frames: int = Field(600, gt=0)
     imu_rate_hz: float = Field(200.0, gt=0, le=400)
     imu_bus: int = Field(0, ge=0)
     stream: bool = False
@@ -177,6 +180,7 @@ class DiskWriterThread:
         self._queue: Any = queue.Queue()
         self._lock = threading.Lock()
         self._pending_frames = 0
+        self.peak_queued = 0  # most frames waiting at once: how close drops came
         self.dropped = 0
         self.error: Optional[Exception] = None
         self._thread = threading.Thread(target=self._loop, daemon=True, name="disk-writer")
@@ -189,8 +193,14 @@ class DiskWriterThread:
                 self.dropped += 1
                 return False
             self._pending_frames += 1
+            self.peak_queued = max(self.peak_queued, self._pending_frames)
         self._queue.put(("frame", (index, t_ns, frame, times)))
         return True
+
+    @property
+    def pending_frames(self) -> int:
+        with self._lock:
+            return self._pending_frames
 
     def submit_imu(self, samples: List[ImuSample]) -> None:
         if samples:
@@ -356,7 +366,9 @@ class Recorder(CameraMotionMixIn):
             index = len(self._frame_times)
             self._frame_times.append(times)
             # Nothing in this loop may touch the disk: see DiskWriterThread.
-            frame_writer.submit(index, times.read_ns, frame, times)
+            # Queue grayscale: a third of the memory per waiting frame.
+            gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_writer.submit(index, times.read_ns, gray, times)
             frame_writer.submit_imu(imu.drain())
             if self._server is not None:
                 self._push_frame(frame)
@@ -366,12 +378,13 @@ class Recorder(CameraMotionMixIn):
                 last_status = time.monotonic()
                 logger.info(
                     f"{last_status - t_start:.0f} s: {len(self._frame_times)} frames, "
-                    f"{writer.imu_samples} IMU samples, dropped {frame_writer.dropped}"
+                    f"{writer.imu_samples} IMU samples written, "
+                    f"{frame_writer.pending_frames} frames queued, dropped {frame_writer.dropped}"
                 )
                 if frame_writer.dropped > dropped_logged:
                     logger.warning(
-                        "Frames dropped: the writer can't keep up (slow SD card?). "
-                        "Try --png-compression 0 or a lower --fps."
+                        "Frames dropped: the SD card can't keep up and the queue is full. "
+                        "Try a larger --queue-frames, a lower --fps, or a faster card."
                     )
                     dropped_logged = frame_writer.dropped
 
@@ -409,6 +422,7 @@ class Recorder(CameraMotionMixIn):
                 "frames_read": len(self._frame_times),
                 "frames_written": len(frames),
                 "frames_dropped": frame_writer.dropped if frame_writer is not None else 0,
+                "queue_peak": frame_writer.peak_queued if frame_writer is not None else 0,
                 "first_ns": frames[0] if frames else None,
                 "last_ns": frames[-1] if frames else None,
                 "timing": timing,
@@ -432,7 +446,7 @@ class Recorder(CameraMotionMixIn):
         if cam is not None:
             logger.info(
                 f"camera:    {cam['frames_written']} frames written, "
-                f"{cam['frames_dropped']} dropped"
+                f"{cam['frames_dropped']} dropped, queue peak {cam['queue_peak']} frames"
             )
             t = cam["timing"]
             if t is not None:

@@ -249,6 +249,15 @@ def register(parser: argparse.ArgumentParser, settings: NanoSettings):
         help="PNG compression level; lower writes faster (default: 1)",
     )
     p_rec.add_argument(
+        "--queue-frames",
+        type=int,
+        default=600,
+        dest="queue_frames",
+        metavar="N",
+        help="Frames held in RAM while the SD card catches up, before dropping "
+        "(default: 600, 20 s, ~185 MB)",
+    )
+    p_rec.add_argument(
         "--rate",
         type=float,
         default=200.0,

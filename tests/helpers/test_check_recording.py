@@ -28,11 +28,13 @@ def _make(
     pts=True,
     meta=None,
     skip_png=None,
+    not_saved=(),
 ):
     """
     Write a recording: n frames at 30 fps; `late` maps frame -> extra read ms;
     frame indices in `drop` are lost by the camera, those in `stall_after` are
-    lost to a recording-loop stall (the next frame is read late).
+    lost to a recording-loop stall (the next frame is read late), those in
+    `not_saved` were read but dropped by the writer (their frame number is skipped).
     """
     late = dict(late or {})
     (root / "mav0/cam0/data").mkdir(parents=True)
@@ -42,6 +44,9 @@ def _make(
     k = 0
     for i in range(n):
         if i in lost:
+            continue
+        if i in not_saved:
+            k += 1
             continue
         p = i * _PERIOD
         extra = late.get(i, 0) + (20 if i - 1 in stall_after else 0)
@@ -100,6 +105,17 @@ class TestCheckRecording:
         report = cr.check_recording(_make(tmp_path, stall_after=(50, 51, 52)))
         assert "recording loop stalled: ~3 frames lost" in _messages(report)
         assert "camera missed" not in _messages(report)
+
+    def test_writer_drop(self, tmp_path):
+        report = cr.check_recording(_make(tmp_path, not_saved=(40, 70, 71)))
+        msg = _messages(report)
+        assert "not saved, writer queue full: ~3 frames lost in 2 gaps" in msg
+        assert "camera missed" not in msg and "stalled" not in msg
+
+    def test_writer_drop_with_late_read_is_not_a_stall(self, tmp_path):
+        report = cr.check_recording(_make(tmp_path, not_saved=(40,), late={41: 12}))
+        assert "not saved, writer queue full" in _messages(report)
+        assert "stalled" not in _messages(report)
 
     def test_missing_png_fails(self, tmp_path):
         report = cr.check_recording(_make(tmp_path, skip_png=10))

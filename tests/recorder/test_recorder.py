@@ -187,6 +187,7 @@ class TestCameraRecording:
         on_disk = json.loads((out / "meta.json").read_text())
         assert on_disk["camera"]["frames_written"] == 10
         assert on_disk["camera"]["frames_dropped"] == 0
+        assert 1 <= on_disk["camera"]["queue_peak"] <= 10
         assert on_disk["camera"]["timestamps"] == "read"
         assert on_disk["imu_covers_camera"] is True
         assert on_disk["config"]["fps"] == 30
@@ -211,6 +212,19 @@ class TestCameraRecording:
         ):
             _record(tmp_path, n=10)
         assert threads == {"disk-writer"}
+
+    def test_frames_queued_as_grayscale(self, tmp_path):
+        # A third of the memory per waiting frame (the queue holds up to 20 s).
+        shapes = []
+        real_submit = DiskWriterThread.submit
+
+        def spy(self, index, t_ns, frame, times):
+            shapes.append(frame.shape)
+            return real_submit(self, index, t_ns, frame, times)
+
+        with patch.object(DiskWriterThread, "submit", spy):
+            _record(tmp_path, n=3)
+        assert shapes == [(6, 8)] * 3
 
     def test_imu_starting_late_is_flagged(self, tmp_path):
         meta, _out, _ = _record(tmp_path, imu_kwargs={"start_ns": _T0 + 50 * _MS})
@@ -311,9 +325,11 @@ class TestDiskWriterThread:
         results = [fw.submit(i, 0, frame, times) for i in range(1, 6)]
         assert results == [True, True, False, False, False]
         assert fw.dropped == 3
+        assert fw.peak_queued == fw.pending_frames == 2
         w.release.set()
         fw.close()
         assert w.written == [0, 1, 2]
+        assert fw.pending_frames == 0
 
     def test_imu_never_dropped_and_kept_in_order(self):
         w = BlockingWriter()
@@ -362,6 +378,7 @@ class TestRecordCommand:
         assert ns.seconds is None
         assert ns.fps == 30
         assert ns.png_compression == 1
+        assert ns.queue_frames == 600
         assert ns.imu_rate_hz == pytest.approx(200.0)
         assert ns.imu_bus == 0
         assert ns.stream is False
@@ -369,8 +386,21 @@ class TestRecordCommand:
 
     def test_custom(self):
         ns = _parse(
-            ["record", "--out", "d", "--imu-only", "-t", "7200", "--rate", "100", "--stream"]
+            [
+                "record",
+                "--out",
+                "d",
+                "--imu-only",
+                "-t",
+                "7200",
+                "--rate",
+                "100",
+                "--stream",
+                "--queue-frames",
+                "900",
+            ]
         )
+        assert ns.queue_frames == 900
         assert ns.imu_only is True
         assert ns.seconds == pytest.approx(7200.0)
         assert ns.imu_rate_hz == pytest.approx(100.0)

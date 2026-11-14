@@ -10,8 +10,9 @@ Each recording gets OK / WARN / FAIL lines for:
   - layout:    the EuRoC files exist, every listed frame is on disk, times.txt
                matches cam0/data.csv, meta.json was saved without an error.
   - frames:    timestamps increase; lost frames (PTS gaps), and whether the
-               recording loop stalled (then appsink dropped them) or the camera
-               didn't deliver them.
+               writer dropped them (frame numbers skip: queue full, slow SD
+               card), the recording loop stalled (then appsink dropped them),
+               or the camera didn't deliver them.
   - read time: how late each frame was read compared to the usual
                (read time - PTS), the error in its timestamp. The camera's first
                second is ignored: its first frames come late (seq01: 20 and 13 ms).
@@ -52,6 +53,7 @@ class Recording(NamedTuple):
     read_ns: Optional[np.ndarray]  # times_raw.csv, None if the file is missing
     pts_ns: Optional[np.ndarray]  # times_raw.csv, None if the PTS is missing
     imu_ns: np.ndarray  # imu0/data.csv timestamps
+    index: Optional[np.ndarray] = None  # times_raw.csv frame numbers (gaps: writer drops)
 
 
 class Report(NamedTuple):
@@ -73,15 +75,16 @@ def load_recording(root: Path) -> Recording:
     cam = _csv_rows(root / "mav0/cam0/data.csv")
     frame_ns = np.array([int(r[0]) for r in cam], dtype=np.int64)
     names = [r[1] for r in cam]
-    read_ns = pts_ns = None
+    read_ns = pts_ns = index = None
     raw_path = root / "mav0/cam0/times_raw.csv"
     if raw_path.exists():
         raw = _csv_rows(raw_path)
+        index = np.array([int(r[0]) for r in raw], dtype=np.int64)
         read_ns = np.array([int(r[2]) for r in raw], dtype=np.int64)
         if raw and all(len(r) > 3 and r[3] for r in raw):
             pts_ns = np.array([int(r[3]) for r in raw], dtype=np.int64)
     imu_ns = np.array([int(r[0]) for r in _csv_rows(root / "mav0/imu0/data.csv")], dtype=np.int64)
-    return Recording(frame_ns, names, read_ns, pts_ns, imu_ns)
+    return Recording(frame_ns, names, read_ns, pts_ns, imu_ns, index)
 
 
 def _check_layout(root: Path, rec: Recording) -> List[Check]:
@@ -139,12 +142,21 @@ def _check_frames(
                 f"{skip_start_s:g} s (skipped)"
             )
         gaps = gaps[~in_start]
-        # A frame read late right after a gap waited in appsink: the recording
-        # loop stalled and appsink dropped the frames meanwhile. Otherwise the
-        # camera itself didn't deliver them.
+        # Frame numbers that jump: the frames were read but the writer's queue
+        # was full (slow SD card). Else a frame read late right after a gap
+        # waited in appsink: the recording loop stalled and appsink dropped the
+        # frames meanwhile. Otherwise the camera itself didn't deliver them.
+        not_saved = np.zeros(len(gaps), bool)
+        if rec.index is not None:
+            not_saved = np.diff(rec.index)[gaps] > 1
         err = read_errors_ms(rec)
-        stalled = np.array([err is not None and err[i + 1] > max_error_ms for i in gaps], bool)
-        for label, sel in (("recording loop stalled", stalled), ("camera missed frames", ~stalled)):
+        late = np.array([err is not None and err[i + 1] > max_error_ms for i in gaps], bool)
+        stalled = late & ~not_saved
+        for label, sel in (
+            ("not saved, writer queue full", not_saved),
+            ("recording loop stalled", stalled),
+            ("camera missed frames", ~stalled & ~not_saved),
+        ):
             g = gaps[sel]
             if len(g):
                 missed = int(np.round(pdt[g] / period).sum() - len(g))
