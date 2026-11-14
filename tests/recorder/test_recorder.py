@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from lib.camera import FrameTimes
 from lib.imu import ImuSample, ImuStats
 from lib.map import recorder as rec
-from lib.map.recorder import EurocWriter, FrameWriterThread, Recorder, RecorderConfig
+from lib.map.recorder import DiskWriterThread, EurocWriter, Recorder, RecorderConfig
 from lib.settings import NanoSettings
 
 _MS = 1_000_000
@@ -193,6 +193,25 @@ class TestCameraRecording:
         assert on_disk["clock"].startswith("CLOCK_MONOTONIC")
         assert meta["camera"]["timing"]["read"]["mean_ms"] == pytest.approx(33.333, abs=0.01)
 
+    def test_loop_never_writes_to_disk(self, tmp_path):
+        # A blocking write() in the camera loop drops frames in appsink (seq02).
+        threads = set()
+        real_imu, real_frame = EurocWriter.write_imu, EurocWriter.write_frame
+
+        def spy_imu(self, samples):
+            threads.add(threading.current_thread().name)
+            real_imu(self, samples)
+
+        def spy_frame(self, *args):
+            threads.add(threading.current_thread().name)
+            real_frame(self, *args)
+
+        with patch.object(EurocWriter, "write_imu", spy_imu), patch.object(
+            EurocWriter, "write_frame", spy_frame
+        ):
+            _record(tmp_path, n=10)
+        assert threads == {"disk-writer"}
+
     def test_imu_starting_late_is_flagged(self, tmp_path):
         meta, _out, _ = _record(tmp_path, imu_kwargs={"start_ns": _T0 + 50 * _MS})
         assert meta["imu_covers_camera"] is False
@@ -265,23 +284,27 @@ class TestImuOnly:
         assert "camera" not in meta
 
 
-# FrameWriterThread
+# DiskWriterThread
 class BlockingWriter:
     def __init__(self):
         self.entered = threading.Event()
         self.release = threading.Event()
         self.written = []
+        self.imu = []
 
     def write_frame(self, index, *_args):
         self.entered.set()
         self.release.wait(5)
         self.written.append(index)
 
+    def write_imu(self, samples):
+        self.imu.extend(samples)
 
-class TestFrameWriterThread:
+
+class TestDiskWriterThread:
     def test_drops_when_full_and_flushes_on_close(self):
         w = BlockingWriter()
-        fw = FrameWriterThread(w, max_frames=2)
+        fw = DiskWriterThread(w, max_frames=2)
         frame, times = np.zeros((2, 2), np.uint8), FrameTimes(0, None)
         assert fw.submit(0, 0, frame, times)
         assert w.entered.wait(5)  # frame 0 is being written; the queue is empty
@@ -291,6 +314,21 @@ class TestFrameWriterThread:
         w.release.set()
         fw.close()
         assert w.written == [0, 1, 2]
+
+    def test_imu_never_dropped_and_kept_in_order(self):
+        w = BlockingWriter()
+        fw = DiskWriterThread(w, max_frames=1)
+        frame, times = np.zeros((2, 2), np.uint8), FrameTimes(0, None)
+        fw.submit(0, 0, frame, times)
+        assert w.entered.wait(5)
+        assert fw.submit(1, 0, frame, times)
+        assert not fw.submit(2, 0, frame, times)  # frame limit reached...
+        for k in range(100):
+            fw.submit_imu([_sample(k)])  # ...but IMU samples still queue
+        w.release.set()
+        fw.close()
+        assert [s.t_ns for s in w.imu] == list(range(100))
+        assert w.written == [0, 1]
 
 
 # EurocWriter

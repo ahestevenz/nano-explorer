@@ -97,8 +97,8 @@ class RecorderConfig(BaseModel):
 
 class EurocWriter:
     """
-    Writes one EuRoC dataset. write_frame() runs on the writer thread and the
-    write_imu() calls on the recording loop: they touch different files.
+    Writes one EuRoC dataset. With a camera, only DiskWriterThread calls it;
+    the --imu-only loop calls write_imu() itself.
     """
 
     def __init__(self, root: Path, camera: bool, png_compression: int = 1):
@@ -158,46 +158,66 @@ class EurocWriter:
         (self.root / "meta.json").write_text(json.dumps(meta, indent=2, default=str) + "\n")
 
 
-class FrameWriterThread:
+class DiskWriterThread:
     """
-    Encodes and writes frames off the recording loop, so a slow PNG write never
-    holds up the next cam.read() (which would delay that frame's read time).
-    A full queue drops the new frame and counts it: a missing frame is harmless,
-    a late timestamp isn't.
+    Does every file write of a camera recording, off the recording loop, so
+    disk I/O never holds up the next cam.read(). On the Nano, a write() can
+    block for hundreds of ms while Linux flushes the PNGs to the SD card, and
+    appsink drops every frame captured meanwhile (seq02: five stalls of
+    0.17-0.63 s, about 4.5 s apart, when the loop still wrote the IMU CSV).
+
+    IMU samples are never dropped. Frames are: past `max_frames` waiting, a new
+    frame is dropped and counted (a missing frame is harmless, a late timestamp
+    isn't).
     """
 
     def __init__(self, writer: EurocWriter, max_frames: int):
         self._writer = writer
-        self._queue: Any = queue.Queue(maxsize=max_frames)
+        self._max_frames = max_frames
+        self._queue: Any = queue.Queue()
+        self._lock = threading.Lock()
+        self._pending_frames = 0
         self.dropped = 0
         self.error: Optional[Exception] = None
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="frame-writer")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="disk-writer")
         self._thread.start()
 
     def submit(self, index: int, t_ns: int, frame: np.ndarray, times: FrameTimes) -> bool:
         """Queue a frame; False if it was dropped."""
-        try:
-            self._queue.put_nowait((index, t_ns, frame, times))
-            return True
-        except queue.Full:
-            self.dropped += 1
-            return False
+        with self._lock:
+            if self._pending_frames >= self._max_frames:
+                self.dropped += 1
+                return False
+            self._pending_frames += 1
+        self._queue.put(("frame", (index, t_ns, frame, times)))
+        return True
+
+    def submit_imu(self, samples: List[ImuSample]) -> None:
+        if samples:
+            self._queue.put(("imu", samples))
 
     def _loop(self) -> None:
         while True:
             item = self._queue.get()
             if item is None:
                 return
+            kind, payload = item
+            if kind == "frame":
+                with self._lock:
+                    self._pending_frames -= 1
             if self.error is not None:
                 continue  # keep emptying the queue so close() can finish
             try:
-                self._writer.write_frame(*item)
+                if kind == "frame":
+                    self._writer.write_frame(*payload)
+                else:
+                    self._writer.write_imu(payload)
             except Exception as e:  # pylint: disable=broad-except
                 self.error = e
-                logger.error(f"Frame writer failed: {e}")
+                logger.error(f"Disk writer failed: {e}")
 
     def close(self) -> None:
-        """Write every queued frame, then stop the thread."""
+        """Write everything queued, then stop the thread."""
         self._queue.put(None)
         self._thread.join()
 
@@ -234,7 +254,7 @@ class Recorder(CameraMotionMixIn):
         writer = EurocWriter(cfg.out, camera=not cfg.imu_only, png_compression=cfg.png_compression)
         imu = ImuReader(bus=cfg.imu_bus, rate_hz=cfg.imu_rate_hz)
         t_start = time.monotonic()
-        frame_writer: Optional[FrameWriterThread] = None
+        frame_writer: Optional[DiskWriterThread] = None
         imu_started = False
         try:
             # IMU first, so its samples cover the first frame.
@@ -243,7 +263,7 @@ class Recorder(CameraMotionMixIn):
             if cfg.imu_only:
                 self._record_imu_only(imu, writer)
             else:
-                frame_writer = FrameWriterThread(writer, cfg.queue_frames)
+                frame_writer = DiskWriterThread(writer, cfg.queue_frames)
                 self._record_camera(imu, writer, frame_writer)
         except KeyboardInterrupt:
             pass
@@ -251,7 +271,10 @@ class Recorder(CameraMotionMixIn):
             self._stop.set()
             if imu_started:
                 imu.stop()
-                writer.write_imu(imu.drain())
+                if frame_writer is not None:
+                    frame_writer.submit_imu(imu.drain())
+                else:
+                    writer.write_imu(imu.drain())
             if frame_writer is not None:
                 logger.info("Writing the queued frames...")
                 frame_writer.close()
@@ -302,7 +325,7 @@ class Recorder(CameraMotionMixIn):
                 )
 
     def _record_camera(
-        self, imu: ImuReader, writer: EurocWriter, frame_writer: FrameWriterThread
+        self, imu: ImuReader, writer: EurocWriter, frame_writer: DiskWriterThread
     ) -> None:
         cfg = self._config
         cam = self._open_camera(
@@ -324,7 +347,7 @@ class Recorder(CameraMotionMixIn):
             self._close_camera(cam)
 
     def _camera_loop(
-        self, cam: Camera, imu: ImuReader, writer: EurocWriter, frame_writer: FrameWriterThread
+        self, cam: Camera, imu: ImuReader, writer: EurocWriter, frame_writer: DiskWriterThread
     ) -> None:
         t_start = last_status = time.monotonic()
         dropped_logged = 0
@@ -332,12 +355,13 @@ class Recorder(CameraMotionMixIn):
             frame, times = cam.read_timed()
             index = len(self._frame_times)
             self._frame_times.append(times)
+            # Nothing in this loop may touch the disk: see DiskWriterThread.
             frame_writer.submit(index, times.read_ns, frame, times)
-            writer.write_imu(imu.drain())
+            frame_writer.submit_imu(imu.drain())
             if self._server is not None:
                 self._push_frame(frame)
             if frame_writer.error is not None:
-                raise RuntimeError(f"Frame writer failed: {frame_writer.error}")
+                raise RuntimeError(f"Disk writer failed: {frame_writer.error}")
             if time.monotonic() - last_status >= _STATUS_EVERY_S:
                 last_status = time.monotonic()
                 logger.info(
@@ -355,7 +379,7 @@ class Recorder(CameraMotionMixIn):
         self,
         writer: EurocWriter,
         imu: Optional[ImuReader],
-        frame_writer: Optional[FrameWriterThread],
+        frame_writer: Optional[DiskWriterThread],
         t_start: float,
     ) -> Dict[str, Any]:
         cfg = self._config

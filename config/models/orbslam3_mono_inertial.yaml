@@ -1,0 +1,95 @@
+%YAML:1.0
+---
+# ORB-SLAM3 IMU_MONOCULAR settings — IMX219 CSI + BNO055 on the Waveshare JetBot.
+# A first guess, for the offline runs on `map record` datasets (ADDING_IMU.md,
+# stage 2), not used live yet. Same legacy format (no File.version key) and the
+# same camera / ORB blocks as orbslam3_mono.yaml, plus the IMU block parsed by
+# Tracking::ParseIMUParamFile in the pyorbslam fork's ORB-SLAM3.
+#
+# Still to replace:
+#   - Tbc: from Kalibr (stage 2). The rotation below comes from seq01's data and
+#     assumes the BNO055's +Z points forward; see the Tbc comment.
+#   - IMU noise: datasheet values (the Allan variance was skipped).
+
+Vocabulary: "assets/models/ORBvoc.txt"
+
+System.RecentlyLostSeconds: 8.0
+
+Camera.type: "PinHole"
+
+# Keep in sync with orbslam3_mono.yaml (Kalibr keeps these fixed).
+Camera.fx: 530.067336
+Camera.fy: 707.509521
+Camera.cx: 305.709515
+Camera.cy: 274.720308
+
+Camera.k1: -0.364345
+Camera.k2: 0.212120
+Camera.p1: -0.000883
+Camera.p2: 0.000625
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+
+# The recordings are grayscale PNGs; ORB-SLAM3 only uses this for colour input.
+Camera.RGB: 0
+
+# Camera-to-IMU (body) transform: p_imu = Tbc * p_cam. Must be dt: f (the
+# fork reads it with ptr<float>).
+#
+# Camera frame: x right, y down, z forward. BNO055 frame, from seq01:
+#   +X up (gravity 10.2 deg off it; turns rotate about it),
+#   ±Z forward/backward (carries the start/stop acceleration),
+#   ±Y sideways.
+# Below assumes +Z forward, so +Y right: camera x -> +Y, y -> -X, z -> +Z.
+# If the tip test says +Z points BACKWARD (Z reads positive with the nose
+# tipped down), use instead:
+#   data: [ 0.0, -1.0,  0.0, 0.0,
+#          -1.0,  0.0,  0.0, 0.0,
+#           0.0,  0.0, -1.0, 0.0,
+#           0.0,  0.0,  0.0, 1.0 ]
+# Translation 0 and the 10 deg tilt ignored until Kalibr gives the real values.
+Tbc: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [ 0.0, -1.0, 0.0, 0.0,
+           1.0,  0.0, 0.0, 0.0,
+           0.0,  0.0, 1.0, 0.0,
+           0.0,  0.0, 0.0, 1.0 ]
+
+# Must be an integer (the fork rejects 200.0).
+IMU.Frequency: 200
+
+# Continuous-time noise densities. Datasheet (BNO055, at the ranges and filters
+# lib/imu.py sets): gyro 0.014 deg/s/sqrt(Hz) = 2.44e-4 rad/s/sqrt(Hz);
+# accelerometer 150 ug/sqrt(Hz) = 1.47e-3 m/s^2/sqrt(Hz). Inflated 10x: the
+# datasheet ignores vibration from the motors, and ORB-SLAM3 needs headroom.
+IMU.NoiseGyro: 2.4e-3   # rad/s/sqrt(Hz)
+IMU.NoiseAcc: 1.5e-2    # m/s^2/sqrt(Hz)
+# Bias random walks: not in the datasheet. Guesses, ~5x and ~3x ORB-SLAM3's
+# EuRoC values (a much better IMU). An Allan variance would replace them.
+IMU.GyroWalk: 1.0e-4    # rad/s^2/sqrt(Hz)
+IMU.AccWalk: 1.0e-2     # m/s^3/sqrt(Hz)
+
+# 1 skips the check that the robot accelerated enough before IMU init. A
+# ground robot gives little excitation; try 1 if init never completes.
+IMU.fastInit: 0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

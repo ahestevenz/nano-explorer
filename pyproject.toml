@@ -95,7 +95,7 @@ ignore = [
 "tests/**" = ["S101", "PLR2004"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["lib", "commands"]
+known-first-party = ["lib", "commands", "helpers"]
 
 [tool.ruff.format]
 # Match black's style
